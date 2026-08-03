@@ -1,0 +1,10 @@
+---
+- name: Load {{ _catalog_application_path | basename }}
+  ansible.builtin.include_vars:
+    file: "{{ _catalog_application_path }}"
+    name: _catalog_application_file
+
+- name: Add {{ _catalog_application_path | basename }} to the application catalog
+  ansible.builtin.set_fact:
+    _incus_application_catalog: >-
+      {{ _incus_application_catalog + [_catalog_application_file] }}

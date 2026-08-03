@@ -1,0 +1,27 @@
+[Unit]
+Description=OpenBao secrets service
+Documentation=https://openbao.org/docs/
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=notify
+User=openbao
+Group=openbao
+Environment=BAO_ADDR=http://127.0.0.1:{{ openbao_api_port }}
+ExecStart=/usr/local/bin/bao server -config={{ openbao_config_path }}
+ExecReload=/bin/kill --signal HUP $MAINPID
+KillMode=process
+KillSignal=SIGINT
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=65536
+MemorySwapMax=0
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths={{ openbao_data_path }} /var/log/openbao
+
+[Install]
+WantedBy=multi-user.target

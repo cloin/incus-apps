@@ -1,0 +1,266 @@
+---
+- name: Install controller operating system packages
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+      - git
+      - openssh-client
+      - python3
+      - python3-apt
+      - python3-pip
+      - python3-venv
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Ensure Semaphore service group exists
+  ansible.builtin.group:
+    name: semaphore
+    system: true
+
+- name: Ensure Semaphore service user exists
+  ansible.builtin.user:
+    name: semaphore
+    group: semaphore
+    home: /home/semaphore
+    shell: /bin/bash
+    system: true
+    create_home: true
+
+- name: Ensure Semaphore directories exist
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner | default('semaphore') }}"
+    group: "{{ item.group | default('semaphore') }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - path: /etc/semaphore
+      owner: root
+      group: semaphore
+      mode: "0750"
+    - path: "{{ semaphore_data_path }}"
+      mode: "0750"
+    - path: "{{ semaphore_data_path }}/tmp"
+      mode: "0750"
+    - path: /opt/semaphore
+      owner: root
+      group: root
+      mode: "0755"
+    - path: "{{ semaphore_collections_path }}"
+      owner: semaphore
+      group: semaphore
+      mode: "0755"
+    - path: /home/semaphore/.config/incus/servercerts
+      mode: "0700"
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Ensure Semaphore owns its Ansible collection tree
+  ansible.builtin.file:
+    path: "{{ semaphore_collections_path }}"
+    state: directory
+    owner: semaphore
+    group: semaphore
+    recurse: true
+
+- name: Download Semaphore package
+  ansible.builtin.get_url:
+    url: "https://github.com/semaphoreui/semaphore/releases/download/v{{ semaphore_version }}/semaphore_{{ semaphore_version }}_linux_amd64.deb"
+    dest: "/var/cache/semaphore_{{ semaphore_version }}_linux_amd64.deb"
+    checksum: "{{ semaphore_deb_checksum }}"
+    mode: "0644"
+
+- name: Install Semaphore package
+  ansible.builtin.apt:
+    deb: "/var/cache/semaphore_{{ semaphore_version }}_linux_amd64.deb"
+    state: present
+
+- name: Install standalone Incus client
+  ansible.builtin.get_url:
+    url: "https://github.com/lxc/incus/releases/download/v{{ semaphore_incus_version }}/bin.linux.incus.x86_64"
+    dest: /usr/local/bin/incus
+    checksum: "{{ semaphore_incus_checksum }}"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install Ansible in an isolated virtual environment
+  ansible.builtin.pip:
+    name: "ansible-core=={{ semaphore_ansible_core_version }}"
+    state: present
+    virtualenv: "{{ semaphore_venv_path }}"
+    virtualenv_command: /usr/bin/python3 -m venv
+
+- name: Install application collection requirements manifest
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../requirements.yml"
+    dest: /etc/semaphore/requirements.yml
+    owner: root
+    group: semaphore
+    mode: "0640"
+  register: _semaphore_requirements
+
+- name: Install Ansible collections for GitOps tasks
+  ansible.builtin.command:
+    argv:
+      - "{{ semaphore_venv_path }}/bin/ansible-galaxy"
+      - collection
+      - install
+      - --requirements-file
+      - /etc/semaphore/requirements.yml
+      - --collections-path
+      - "{{ semaphore_collections_path }}"
+      - --upgrade
+  become: true
+  become_user: semaphore
+  environment:
+    HOME: /home/semaphore
+  register: _semaphore_collections
+  changed_when: "'was installed successfully' in _semaphore_collections.stdout"
+  when: _semaphore_requirements.changed or not ansible_check_mode
+
+- name: Install Semaphore Incus client certificate
+  ansible.builtin.copy:
+    content: "{{ lab_semaphore_incus_client_cert }}"
+    dest: /home/semaphore/.config/incus/client.crt
+    owner: semaphore
+    group: semaphore
+    mode: "0644"
+
+- name: Install Semaphore Incus client key
+  ansible.builtin.copy:
+    content: "{{ lab_semaphore_incus_client_key }}"
+    dest: /home/semaphore/.config/incus/client.key
+    owner: semaphore
+    group: semaphore
+    mode: "0600"
+  no_log: true
+
+- name: Pin the Incus lab server certificate
+  ansible.builtin.copy:
+    content: "{{ lab_semaphore_incus_server_cert }}"
+    dest: /home/semaphore/.config/incus/servercerts/lab.crt
+    owner: semaphore
+    group: semaphore
+    mode: "0644"
+
+- name: Configure Incus CLI for the Semaphore user
+  ansible.builtin.template:
+    src: incus-config.yml.j2
+    dest: /home/semaphore/.config/incus/config.yml
+    owner: semaphore
+    group: semaphore
+    mode: "0600"
+
+- name: Install Semaphore configuration
+  ansible.builtin.template:
+    src: config.json.j2
+    dest: "{{ semaphore_config_path }}"
+    owner: root
+    group: semaphore
+    mode: "0640"
+  notify: Restart Semaphore
+  no_log: true
+
+- name: Check whether the Semaphore database exists
+  ansible.builtin.stat:
+    path: "{{ semaphore_data_path }}/database.sqlite"
+  register: _semaphore_database
+
+- name: Apply Semaphore database migrations
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/semaphore
+      - migrate
+      - --config
+      - "{{ semaphore_config_path }}"
+  become: true
+  become_user: semaphore
+  environment:
+    HOME: /home/semaphore
+  changed_when: not _semaphore_database.stat.exists
+
+- name: List Semaphore users
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/semaphore
+      - user
+      - list
+      - --config
+      - "{{ semaphore_config_path }}"
+  become: true
+  become_user: semaphore
+  environment:
+    HOME: /home/semaphore
+  register: _semaphore_users
+  changed_when: false
+
+- name: Create Semaphore administrator
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/semaphore
+      - user
+      - add
+      - --login
+      - "{{ lab_semaphore_admin_username }}"
+      - --name
+      - Administrator
+      - --email
+      - "{{ lab_semaphore_admin_email }}"
+      - --password
+      - "{{ lab_semaphore_admin_password }}"
+      - --admin
+      - --config
+      - "{{ semaphore_config_path }}"
+  become: true
+  become_user: semaphore
+  environment:
+    HOME: /home/semaphore
+  when: lab_semaphore_admin_username not in _semaphore_users.stdout
+  changed_when: true
+  no_log: true
+
+- name: Install Semaphore systemd unit
+  ansible.builtin.template:
+    src: semaphore.service.j2
+    dest: /etc/systemd/system/semaphore.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Semaphore
+
+- name: Enable and start Semaphore
+  ansible.builtin.systemd_service:
+    name: semaphore
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Apply pending Semaphore restart
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for Semaphore API
+  ansible.builtin.uri:
+    url: http://127.0.0.1:3000/api/ping
+    status_code: 200
+  register: _semaphore_health
+  retries: 30
+  delay: 2
+  until: _semaphore_health.status == 200
+
+- name: Verify Semaphore can authenticate to Incus
+  ansible.builtin.command:
+    argv:
+      - /usr/local/bin/incus
+      - project
+      - list
+      - "{{ incus_remote }}:"
+      - --format
+      - csv
+  become: true
+  become_user: semaphore
+  environment:
+    HOME: /home/semaphore
+  changed_when: false

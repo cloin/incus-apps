@@ -1,0 +1,39 @@
+---
+- name: Validate the controller and personalized lab configuration
+  ansible.builtin.import_playbook: preflight.yml
+
+- name: Deploy the ingress and OpenBao foundation
+  ansible.builtin.import_playbook: bootstrap_openbao.yml
+
+- name: Initialize OpenBao and generate platform credentials
+  ansible.builtin.import_playbook: initialize_openbao.yml
+
+- name: Deploy Gitea and Semaphore Incus primitives
+  ansible.builtin.import_playbook: apply_platform.yml
+
+- name: Configure Gitea and its private repository
+  ansible.builtin.import_playbook: bootstrap_gitea.yml
+
+- name: Provision Semaphore and trust its Incus identity
+  ansible.builtin.import_playbook: bootstrap_semaphore.yml
+
+- name: Deploy Caddy and generate the application routes
+  ansible.builtin.import_playbook: reconcile_ingress.yml
+
+- name: Trust Caddy's internal CA where required
+  ansible.builtin.import_playbook: trust_internal_ca.yml
+
+- name: Seed the personalized source of truth into Gitea
+  ansible.builtin.import_playbook: seed_gitea_repository.yml
+
+- name: Configure the Gitea to Semaphore automation loop
+  ansible.builtin.import_playbook: configure_gitops.yml
+
+- name: Prove the OpenBao-backed GitOps execution path
+  ansible.builtin.import_playbook: verify_gitops.yml
+
+- name: Remove superseded bootstrap AppRole credentials
+  ansible.builtin.import_playbook: finalize_openbao.yml
+
+- name: Verify the deployed lab endpoints and Incus resources
+  ansible.builtin.import_playbook: verify.yml

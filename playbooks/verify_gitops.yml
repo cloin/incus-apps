@@ -1,0 +1,126 @@
+---
+- name: Verify a real Semaphore Apply All task
+  hosts: incus_api
+  gather_facts: false
+
+  vars:
+    _semaphore_url: "{{ semaphore_bootstrap_url }}"
+
+  pre_tasks:
+    - name: Load application secrets from OpenBao
+      ansible.builtin.include_tasks: tasks/load_openbao_secrets.yml
+
+    - name: Load the application catalog
+      ansible.builtin.include_tasks: tasks/load_catalog.yml
+
+  tasks:
+    - name: Log in to Semaphore
+      ansible.builtin.uri:
+        url: "{{ _semaphore_url }}/api/auth/login"
+        method: POST
+        body_format: json
+        body:
+          auth: "{{ lab_semaphore_admin_username }}"
+          password: "{{ lab_semaphore_admin_password }}"
+        status_code: 204
+      register: _semaphore_login
+      no_log: true
+
+    - name: Find the GitOps project
+      ansible.builtin.uri:
+        url: "{{ _semaphore_url }}/api/projects"
+        headers:
+          Cookie: "{{ _semaphore_login.cookies_string }}"
+        status_code: 200
+      register: _semaphore_projects
+      no_log: true
+
+    - name: Select the GitOps project ID
+      ansible.builtin.set_fact:
+        _gitops_project_id: >-
+          {{ (_semaphore_projects.json |
+              selectattr('name', 'equalto', gitops_project_name) | first).id }}
+
+    - name: Find the Apply All template
+      ansible.builtin.uri:
+        url: >-
+          {{ _semaphore_url }}/api/project/{{ _gitops_project_id }}/templates?sort=name&order=asc
+        headers:
+          Cookie: "{{ _semaphore_login.cookies_string }}"
+        status_code: 200
+      register: _semaphore_templates
+      no_log: true
+
+    - name: Select the Apply All template ID
+      ansible.builtin.set_fact:
+        _apply_all_template_id: >-
+          {{ (_semaphore_templates.json |
+              selectattr('name', 'equalto', 'Apply All') | first).id }}
+
+    - name: Launch one bootstrap verification task
+      ansible.builtin.uri:
+        url: "{{ _semaphore_url }}/api/project/{{ _gitops_project_id }}/tasks"
+        method: POST
+        headers:
+          Cookie: "{{ _semaphore_login.cookies_string }}"
+        body_format: json
+        body:
+          template_id: "{{ _apply_all_template_id }}"
+          debug: false
+          dry_run: false
+          diff: false
+        status_code: 201
+      register: _semaphore_verification_task
+      no_log: true
+
+    - name: Wait for the Semaphore verification task
+      ansible.builtin.uri:
+        url: >-
+          {{ _semaphore_url }}/api/project/{{ _gitops_project_id
+          }}/tasks/{{ _semaphore_verification_task.json.id }}
+        headers:
+          Cookie: "{{ _semaphore_login.cookies_string }}"
+        status_code: 200
+      register: _semaphore_task_final
+      until: _semaphore_task_final.json.status not in ['waiting', 'running']
+      retries: 120
+      delay: 5
+      no_log: true
+
+    - name: Read the Semaphore verification output
+      ansible.builtin.uri:
+        url: >-
+          {{ _semaphore_url }}/api/project/{{ _gitops_project_id
+          }}/tasks/{{ _semaphore_verification_task.json.id }}/output
+        headers:
+          Cookie: "{{ _semaphore_login.cookies_string }}"
+        status_code: 200
+        return_content: true
+      register: _semaphore_task_output
+      no_log: true
+
+    - name: Require a successful AppRole-backed GitOps run
+      ansible.builtin.assert:
+        that:
+          - _semaphore_task_final.json.status == 'success'
+          - >-
+            'Log in to OpenBao with the Semaphore AppRole' in
+            _semaphore_task_output.content
+          - "'failed=0' in _semaphore_task_output.content"
+        fail_msg: >-
+          Semaphore did not complete a clean OpenBao AppRole-backed Apply All run.
+
+    - name: Report the verified GitOps task
+      ansible.builtin.debug:
+        msg: >-
+          Semaphore task {{ _semaphore_verification_task.json.id }} succeeded
+          through the read-only OpenBao AppRole.
+
+    - name: Log out of Semaphore
+      ansible.builtin.uri:
+        url: "{{ _semaphore_url }}/api/auth/logout"
+        method: POST
+        headers:
+          Cookie: "{{ _semaphore_login.cookies_string }}"
+        status_code: 204
+      no_log: true

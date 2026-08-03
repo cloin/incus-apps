@@ -1,0 +1,36 @@
+---
+- name: Remove one Incus application
+  hosts: incus_api
+  gather_facts: false
+
+  pre_tasks:
+    - name: Validate requested application name
+      ansible.builtin.assert:
+        that:
+          - app is defined
+          - app is match('^[a-z0-9][a-z0-9-]*$')
+        fail_msg: Supply an application with -e app=<name>.
+
+    - name: Load application secrets from OpenBao
+      ansible.builtin.include_tasks: tasks/load_openbao_secrets.yml
+
+    - name: Load and validate the application catalog
+      ansible.builtin.include_tasks: tasks/load_catalog.yml
+
+    - name: Load application definition
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../apps/{{ app }}.yaml"
+        name: _application_file
+
+  roles:
+    - role: application
+      incus_application_definition: "{{ _application_file }}"
+      incus_application_state_override: absent
+      incus_application_destroy_data: "{{ destroy_data | default(false) | bool }}"
+
+- name: Reconcile Caddy after application removal
+  ansible.builtin.import_playbook: reconcile_ingress.yml
+  when: app != 'ingress'
+  vars:
+    incus_ingress_excluded_applications:
+      - "{{ app }}"

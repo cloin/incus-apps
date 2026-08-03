@@ -1,0 +1,70 @@
+---
+- name: Trust the OpenBao-managed Semaphore controller identity
+  hosts: incus_api
+  gather_facts: false
+
+  pre_tasks:
+    - name: Load application secrets from OpenBao
+      ansible.builtin.include_tasks: tasks/load_openbao_secrets.yml
+
+    - name: Load the application catalog
+      ansible.builtin.include_tasks: tasks/load_catalog.yml
+
+  tasks:
+    - name: Inspect Incus trusted client identities
+      ansible.builtin.command:
+        argv:
+          - incus
+          - config
+          - trust
+          - list
+          - "{{ incus_remote }}:"
+          - --format
+          - json
+      register: _incus_trusted_identities
+      changed_when: false
+
+    - name: Trust the Semaphore GitOps controller in Incus
+      ansible.builtin.command:
+        argv:
+          - incus
+          - config
+          - trust
+          - add-certificate
+          - "{{ incus_remote }}:"
+          - /dev/stdin
+          - --name
+          - semaphore-gitops
+        stdin: "{{ lab_semaphore_incus_client_cert }}"
+      when: >-
+        'semaphore-gitops' not in
+        (_incus_trusted_identities.stdout | from_json |
+         map(attribute='name') | list)
+      changed_when: true
+      no_log: true
+
+- name: Bootstrap Python inside the Semaphore system container
+  hosts: semaphore
+  gather_facts: false
+
+  tasks:
+    - name: Install Python for Ansible modules
+      ansible.builtin.raw: >-
+        test -x /usr/bin/python3 ||
+        (export DEBIAN_FRONTEND=noninteractive &&
+        apt-get update && apt-get install -y python3 python3-apt)
+      changed_when: false
+
+- name: Provision Semaphore UI and its GitOps runtime
+  hosts: semaphore
+  gather_facts: true
+
+  pre_tasks:
+    - name: Load application secrets from OpenBao
+      ansible.builtin.include_tasks: tasks/load_openbao_secrets.yml
+
+    - name: Load the application catalog
+      ansible.builtin.include_tasks: tasks/load_catalog.yml
+
+  roles:
+    - role: semaphore

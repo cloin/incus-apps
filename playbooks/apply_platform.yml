@@ -1,0 +1,22 @@
+---
+- name: Reconcile the Gitea and Semaphore platform primitives
+  hosts: incus_api
+  gather_facts: false
+
+  pre_tasks:
+    - name: Load generated platform secrets from OpenBao
+      ansible.builtin.include_tasks: tasks/load_openbao_secrets.yml
+
+    - name: Load and validate the application catalog
+      ansible.builtin.include_tasks: tasks/load_catalog.yml
+
+  tasks:
+    - name: Reconcile the Gitea application primitives
+      ansible.builtin.include_tasks: tasks/apply_file.yml
+      vars:
+        _application_path: "{{ playbook_dir }}/../apps/gitea.yaml"
+
+    - name: Reconcile the Semaphore application primitives
+      ansible.builtin.include_tasks: tasks/apply_file.yml
+      vars:
+        _application_path: "{{ playbook_dir }}/../apps/semaphore.yaml"

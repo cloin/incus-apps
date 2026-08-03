@@ -1,0 +1,30 @@
+---
+- name: Apply every Incus application
+  hosts: incus_api
+  gather_facts: false
+
+  pre_tasks:
+    - name: Load application secrets from OpenBao
+      ansible.builtin.include_tasks: tasks/load_openbao_secrets.yml
+
+    - name: Load and validate the application catalog
+      ansible.builtin.include_tasks: tasks/load_catalog.yml
+
+  tasks:
+    - name: Reconcile the shared ingress foundation first
+      ansible.builtin.include_tasks: tasks/apply_file.yml
+      vars:
+        _application_path: "{{ playbook_dir }}/../apps/ingress.yaml"
+
+    - name: Reconcile application definitions
+      ansible.builtin.include_tasks: tasks/apply_file.yml
+      loop: >-
+        {{ query('ansible.builtin.fileglob', playbook_dir ~ '/../apps/*.yaml') |
+           reject('equalto', playbook_dir ~ '/../apps/ingress.yaml') | sort }}
+      loop_control:
+        loop_var: _application_path
+        label: "{{ _application_path | basename }}"
+      when: _application_path | basename != 'ingress.yaml'
+
+- name: Reconcile Caddy after all applications
+  ansible.builtin.import_playbook: reconcile_ingress.yml

@@ -1,0 +1,101 @@
+---
+- name: Verify Incus applications
+  hosts: incus_api
+  gather_facts: false
+
+  tasks:
+    - name: Load application secrets from OpenBao
+      ansible.builtin.include_tasks: tasks/load_openbao_secrets.yml
+
+    - name: Load and validate the application catalog
+      ansible.builtin.include_tasks: tasks/load_catalog.yml
+
+    - name: Query all managed projects
+      damex.incus.incus_project_info:
+        url: "{{ incus_api_url }}"
+        client_cert_path: "{{ incus_client_cert_path }}"
+        client_key_path: "{{ incus_client_key_path }}"
+        server_cert_path: "{{ incus_server_cert_path | default(omit, true) }}"
+        validate_certs: "{{ incus_validate_certs }}"
+      register: _incus_projects
+
+    - name: Require deployed platform projects
+      ansible.builtin.assert:
+        that:
+          - item in (_incus_projects.projects | map(attribute='name') | list)
+        fail_msg: "Required Incus project {{ item }} is missing."
+      loop:
+        - gitea
+        - ingress
+        - openbao
+        - semaphore
+
+    - name: Verify HTTP services
+      ansible.builtin.uri:
+        url: "{{ item.url }}"
+        status_code: "{{ item.status }}"
+        validate_certs: false
+      register: _service_health
+      retries: 10
+      delay: 3
+      until: _service_health.status in item.status
+      loop:
+        - name: Incus UI
+          url: "https://{{ incus_lab_address }}:8443/ui/"
+          status: [200]
+        - name: Gitea
+          url: "{{ gitea_bootstrap_url }}/api/healthz"
+          status: [200]
+        - name: Semaphore
+          url: "{{ semaphore_bootstrap_url }}/api/ping"
+          status: [200]
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Verify the unsealed OpenBao service
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8200/v1/sys/health?standbyok=true
+        status_code: 200
+      delegate_to: openbao
+
+    - name: Query live Incus instances for ingress verification
+      ansible.builtin.command:
+        argv:
+          - incus
+          - list
+          - "{{ incus_remote }}:"
+          - --all-projects
+          - --format
+          - json
+      register: _incus_ingress_instances
+      changed_when: false
+
+    - name: Resolve ingress routes from live Incus addresses
+      ansible.builtin.set_fact:
+        _incus_ingress_routes: >-
+          {{ _incus_application_catalog |
+             incus_app_ingress_bindings(
+             _incus_ingress_instances.stdout | from_json) }}
+
+    - name: Verify HTTPS routes through shared Caddy ingress
+      ansible.builtin.command:
+        argv:
+          - curl
+          - --fail
+          - --insecure
+          - --location
+          - --silent
+          - --show-error
+          - --output
+          - /dev/null
+          - --resolve
+          - "{{ item.host }}:443:{{ incus_lab_address }}"
+          - "https://{{ item.host }}/"
+      register: _ingress_health
+      changed_when: false
+      retries: 10
+      delay: 3
+      until: _ingress_health.rc == 0
+      loop: "{{ _incus_ingress_routes }}"
+      loop_control:
+        label: "{{ item.host }} -> {{ item.address }}:{{ item.port }}"

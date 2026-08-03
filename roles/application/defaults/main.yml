@@ -1,0 +1,19 @@
+---
+incus_application_definition: {}
+incus_application_state_override: ""
+incus_application_update: false
+incus_application_destroy_data: false
+
+incus_application_default_project_config:
+  features.images: false
+  features.networks: false
+  features.networks.zones: true
+  features.profiles: false
+  features.storage.volumes: true
+  features.storage.buckets: false
+
+incus_application_default_instance_config:
+  boot.autostart: true
+  boot.autorestart: true
+
+incus_application_hide_sensitive_values: true

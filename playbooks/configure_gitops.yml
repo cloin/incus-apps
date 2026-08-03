@@ -1,0 +1,626 @@
+---
+- name: Configure the Gitea to Semaphore GitOps loop
+  hosts: incus_api
+  gather_facts: false
+
+  vars:
+    _semaphore_url: "{{ semaphore_bootstrap_url }}"
+    _gitea_url: "{{ gitea_bootstrap_url }}"
+    _gitea_repository_url: >-
+      {{ _gitea_url }}/{{ lab_gitea_admin_username }}/{{ gitea_repository_name }}.git
+
+  pre_tasks:
+    - name: Load application secrets from OpenBao
+      ansible.builtin.include_tasks: tasks/load_openbao_secrets.yml
+
+    - name: Load the application catalog
+      ansible.builtin.include_tasks: tasks/load_catalog.yml
+
+  tasks:
+    - name: Log in to Semaphore
+      ansible.builtin.uri:
+        url: "{{ _semaphore_url }}/api/auth/login"
+        method: POST
+        body_format: json
+        body:
+          auth: "{{ lab_semaphore_admin_username }}"
+          password: "{{ lab_semaphore_admin_password }}"
+        status_code: 204
+      register: _semaphore_login
+      no_log: true
+
+    - name: List Semaphore projects
+      ansible.builtin.uri:
+        url: "{{ _semaphore_url }}/api/projects"
+        headers:
+          Cookie: "{{ _semaphore_login.cookies_string }}"
+        status_code: 200
+      register: _semaphore_projects
+      no_log: true
+
+    - name: Create the Semaphore GitOps project
+      ansible.builtin.uri:
+        url: "{{ _semaphore_url }}/api/projects"
+        method: POST
+        headers:
+          Cookie: "{{ _semaphore_login.cookies_string }}"
+        body_format: json
+        body:
+          name: "{{ gitops_project_name }}"
+          alert: false
+          max_parallel_tasks: 1
+          demo: false
+        status_code: 201
+      when: >-
+        gitops_project_name not in
+        (_semaphore_projects.json | map(attribute='name') | list)
+      changed_when: true
+      no_log: true
+
+    - name: Reload Semaphore projects
+      ansible.builtin.uri:
+        url: "{{ _semaphore_url }}/api/projects"
+        headers:
+          Cookie: "{{ _semaphore_login.cookies_string }}"
+        status_code: 200
+      register: _semaphore_projects_current
+      no_log: true
+
+    - name: Select the Semaphore GitOps project
+      ansible.builtin.set_fact:
+        _gitops_project_id: >-
+          {{ (_semaphore_projects_current.json |
+              selectattr('name', 'equalto', gitops_project_name) | first).id }}
+
+    - name: List Semaphore access keys
+      ansible.builtin.uri:
+        url: >-
+          {{ _semaphore_url }}/api/project/{{ _gitops_project_id }}/keys?sort=name&order=asc
+        headers:
+          Cookie: "{{ _semaphore_login.cookies_string }}"
+        status_code: 200
+      register: _semaphore_keys
+      no_log: true
+
+    - name: Create missing Semaphore access keys
+      ansible.builtin.uri:
+        url: "{{ _semaphore_url }}/api/project/{{ _gitops_project_id }}/keys"
+        method: POST
+        headers:
+          Cookie: "{{ _semaphore_login.cookies_string }}"
+        body_format: json
+        body: >-
+          {{ item.body | combine({
+            'name': item.name,
+            'project_id': _gitops_project_id
+          }) }}
+        status_code: 201
+      loop:
+        - name: None
+          body:
+            type: none
+        - name: Gitea Repository
+          body:
+            type: login_password
+            override_secret: true
+            login_password:
+              login: "{{ lab_gitea_admin_username }}"
+              password: "{{ lab_gitea_api_token }}"
+        - name: Gitea Webhook HMAC
+          body:
+            type: login_password
+            override_secret: true
+            login_password:
+              login: gitea
+              password: "{{ lab_gitea_webhook_secret }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: item.name not in (_semaphore_keys.json | map(attribute='name') | list)
+      changed_when: true
+      no_log: true
+
+    - name: Reload Semaphore access keys
+      ansible.builtin.uri:
+        url: >-
+          {{ _semaphore_url }}/api/project/{{ _gitops_project_id }}/keys?sort=name&order=asc
+        headers:
+          Cookie: "{{ _semaphore_login.cookies_string }}"
+        status_code: 200
+      register: _semaphore_keys_current
+      no_log: true
+
+    - name: Select the Semaphore access keys
+      ansible.builtin.set_fact:
+        _none_key_id: >-
+          {{ (_semaphore_keys_current.json |
+              selectattr('name', 'equalto', 'None') | first).id }}
+        _gitea_repository_key_id: >-
+          {{ (_semaphore_keys_current.json |
+              selectattr('name', 'equalto', 'Gitea Repository') | first).id }}
+        _gitea_hmac_key_id: >-
+          {{ (_semaphore_keys_current.json |
+              selectattr('name', 'equalto', 'Gitea Webhook HMAC') | first).id }}
+      no_log: true
+
+    - name: List Semaphore repositories
+      ansible.builtin.uri:
+        url: >-
+          {{ _semaphore_url }}/api/project/{{ _gitops_project_id }}/repositories?sort=name&order=asc
+        headers:
+          Cookie: "{{ _semaphore_login.cookies_string }}"
+        status_code: 200
+      register: _semaphore_repositories
+      no_log: true
+
+    - name: Create the Semaphore Gitea repository
+      ansible.builtin.uri:
+        url: "{{ _semaphore_url }}/api/project/{{ _gitops_project_id }}/repositories"
+        method: POST
+        headers:
+          Cookie: "{{ _semaphore_login.cookies_string }}"
+        body_format: json
+        body:
+          name: "{{ gitops_repository_name }}"
+          project_id: "{{ _gitops_project_id }}"
+          git_url: "{{ _gitea_repository_url }}"
+          git_branch: "{{ gitops_branch }}"
+          ssh_key_id: "{{ _gitea_repository_key_id }}"
+        status_code: 201
+      when: >-
+        gitops_repository_name not in
+        (_semaphore_repositories.json | map(attribute='name') | list)
+      changed_when: true
+      no_log: true
+
+    - name: Reload Semaphore repositories
+      ansible.builtin.uri:
+        url: >-
+          {{ _semaphore_url }}/api/project/{{ _gitops_project_id }}/repositories?sort=name&order=asc
+        headers:
+          Cookie: "{{ _semaphore_login.cookies_string }}"
+        status_code: 200
+      register: _semaphore_repositories_current
+      no_log: true
+
+    - name: Select the Semaphore Gitea repository
+      ansible.builtin.set_fact:
+        _gitops_repository_id: >-
+          {{ (_semaphore_repositories_current.json |
+              selectattr('name', 'equalto', gitops_repository_name) | first).id }}
+
+    - name: List Semaphore inventories
+      ansible.builtin.uri:
+        url: >-
+          {{ _semaphore_url }}/api/project/{{ _gitops_project_id }}/inventory?sort=name&order=asc
+        headers:
+          Cookie: "{{ _semaphore_login.cookies_string }}"
+        status_code: 200
+      register: _semaphore_inventories
+      no_log: true
+
+    - name: Create the Semaphore Incus inventory
+      ansible.builtin.uri:
+        url: "{{ _semaphore_url }}/api/project/{{ _gitops_project_id }}/inventory"
+        method: POST
+        headers:
+          Cookie: "{{ _semaphore_login.cookies_string }}"
+        body_format: json
+        body:
+          name: "{{ gitops_inventory_name }}"
+          project_id: "{{ _gitops_project_id }}"
+          inventory: inventories/lab.yml
+          ssh_key_id: "{{ _none_key_id }}"
+          repository_id: "{{ _gitops_repository_id }}"
+          type: file
+        status_code: 201
+      when: >-
+        gitops_inventory_name not in
+        (_semaphore_inventories.json | map(attribute='name') | list)
+      changed_when: true
+      no_log: true
+
+    - name: Reload Semaphore inventories
+      ansible.builtin.uri:
+        url: >-
+          {{ _semaphore_url }}/api/project/{{ _gitops_project_id }}/inventory?sort=name&order=asc
+        headers:
+          Cookie: "{{ _semaphore_login.cookies_string }}"
+        status_code: 200
+      register: _semaphore_inventories_current
+      no_log: true
+
+    - name: Select the Semaphore Incus inventory
+      ansible.builtin.set_fact:
+        _gitops_inventory_id: >-
+          {{ (_semaphore_inventories_current.json |
+              selectattr('name', 'equalto', gitops_inventory_name) | first).id }}
+
+    - name: List Semaphore environments
+      ansible.builtin.uri:
+        url: >-
+          {{ _semaphore_url }}/api/project/{{ _gitops_project_id }}/environment?sort=name&order=asc
+        headers:
+          Cookie: "{{ _semaphore_login.cookies_string }}"
+        status_code: 200
+      register: _semaphore_environments
+      no_log: true
+
+    - name: Build the Semaphore runtime environment
+      ansible.builtin.set_fact:
+        _gitops_environment_plain: >-
+          {{ {
+            'INCUS_API_URL': incus_api_url,
+            'INCUS_CLIENT_CERT_PATH': '/home/semaphore/.config/incus/client.crt',
+            'INCUS_CLIENT_KEY_PATH': '/home/semaphore/.config/incus/client.key',
+            'INCUS_SERVER_CERT_PATH': '/home/semaphore/.config/incus/servercerts/lab.crt',
+            'INCUS_VALIDATE_CERTS': (incus_validate_certs | bool | ternary('true', 'false')),
+            'OPENBAO_ADDR': openbao_public_url,
+            'OPENBAO_ROLE_ID': openbao_semaphore_role_id
+          } | to_json }}
+
+    - name: Require an AppRole SecretID for a new Semaphore environment
+      ansible.builtin.assert:
+        that:
+          - openbao_semaphore_secret_id is defined
+          - openbao_semaphore_secret_id | length > 0
+        fail_msg: >-
+          A new Semaphore environment requires a freshly issued OpenBao AppRole
+          SecretID. Run the complete playbooks/bootstrap_lab.yml workflow.
+      when: >-
+        gitops_environment_name not in
+        (_semaphore_environments.json | map(attribute='name') | list)
+      no_log: true
+
+    - name: Create the OpenBao-backed Semaphore environment
+      ansible.builtin.uri:
+        url: "{{ _semaphore_url }}/api/project/{{ _gitops_project_id }}/environment"
+        method: POST
+        headers:
+          Cookie: "{{ _semaphore_login.cookies_string }}"
+        body_format: json
+        body:
+          name: "{{ gitops_environment_name }}"
+          project_id: "{{ _gitops_project_id }}"
+          json: "{}"
+          env: "{{ _gitops_environment_plain }}"
+          secrets:
+            - name: OPENBAO_SECRET_ID
+              secret: "{{ openbao_semaphore_secret_id }}"
+              type: env
+              operation: create
+        status_code: 201
+      when: >-
+        gitops_environment_name not in
+        (_semaphore_environments.json | map(attribute='name') | list)
+      changed_when: true
+      no_log: true
+
+    - name: Reload Semaphore environments
+      ansible.builtin.uri:
+        url: >-
+          {{ _semaphore_url }}/api/project/{{ _gitops_project_id }}/environment?sort=name&order=asc
+        headers:
+          Cookie: "{{ _semaphore_login.cookies_string }}"
+        status_code: 200
+      register: _semaphore_environments_current
+      no_log: true
+
+    - name: Select the OpenBao-backed Semaphore environment
+      ansible.builtin.set_fact:
+        _gitops_environment_id: >-
+          {{ (_semaphore_environments_current.json |
+              selectattr('name', 'equalto', gitops_environment_name) | first).id }}
+
+    - name: Read the current Semaphore environment
+      ansible.builtin.uri:
+        url: >-
+          {{ _semaphore_url }}/api/project/{{ _gitops_project_id
+          }}/environment/{{ _gitops_environment_id }}
+        headers:
+          Cookie: "{{ _semaphore_login.cookies_string }}"
+        status_code: 200
+      register: _semaphore_environment_current
+      no_log: true
+
+    - name: Require an existing or newly issued AppRole SecretID
+      ansible.builtin.assert:
+        that:
+          - >-
+            openbao_semaphore_secret_id is defined or
+            'OPENBAO_SECRET_ID' in
+            (_semaphore_environment_current.json.secrets | default([]) |
+             map(attribute='name') | list)
+      no_log: true
+
+    - name: Preserve the current Semaphore environment secrets
+      ansible.builtin.set_fact:
+        _gitops_environment_secret_operations: >-
+          {{ _semaphore_environment_current.json.secrets | default([]) }}
+      when: openbao_semaphore_secret_id is not defined
+      no_log: true
+
+    - name: Build the AppRole SecretID update operation
+      ansible.builtin.set_fact:
+        _gitops_environment_secret_operations:
+          - id: >-
+              {{ _semaphore_environment_current.json.secrets | default([]) |
+                 selectattr('name', 'equalto', 'OPENBAO_SECRET_ID') |
+                 map(attribute='id') | first | default(0) }}
+            name: OPENBAO_SECRET_ID
+            secret: "{{ openbao_semaphore_secret_id }}"
+            type: env
+            operation: >-
+              {{ 'update'
+                 if 'OPENBAO_SECRET_ID' in
+                    (_semaphore_environment_current.json.secrets | default([]) |
+                     map(attribute='name') | list)
+                 else 'create' }}
+      when: openbao_semaphore_secret_id is defined
+      no_log: true
+
+    - name: Reconcile the Semaphore runtime environment
+      ansible.builtin.uri:
+        url: >-
+          {{ _semaphore_url }}/api/project/{{ _gitops_project_id
+          }}/environment/{{ _gitops_environment_id }}
+        method: PUT
+        headers:
+          Cookie: "{{ _semaphore_login.cookies_string }}"
+        body_format: json
+        body: >-
+          {{ _semaphore_environment_current.json | combine({
+            'json': '{}',
+            'env': _gitops_environment_plain,
+            'secrets': _gitops_environment_secret_operations
+          }) }}
+        status_code: 204
+      changed_when: true
+      no_log: true
+
+    - name: List Semaphore templates
+      ansible.builtin.uri:
+        url: >-
+          {{ _semaphore_url }}/api/project/{{ _gitops_project_id }}/templates?sort=name&order=asc
+        headers:
+          Cookie: "{{ _semaphore_login.cookies_string }}"
+        status_code: 200
+      register: _semaphore_templates
+      no_log: true
+
+    - name: Create missing Semaphore application templates
+      ansible.builtin.uri:
+        url: "{{ _semaphore_url }}/api/project/{{ _gitops_project_id }}/templates"
+        method: POST
+        headers:
+          Cookie: "{{ _semaphore_login.cookies_string }}"
+        body_format: json
+        body:
+          name: "{{ item.name }}"
+          project_id: "{{ _gitops_project_id }}"
+          inventory_id: "{{ _gitops_inventory_id }}"
+          repository_id: "{{ _gitops_repository_id }}"
+          environment_id: "{{ _gitops_environment_id }}"
+          environment_ids:
+            - "{{ _gitops_environment_id }}"
+          playbook: "{{ item.playbook }}"
+          arguments: "[]"
+          description: "{{ item.description }}"
+          allow_override_args_in_task: false
+          suppress_success_alerts: true
+          app: ansible
+          git_branch: "{{ gitops_branch }}"
+          type: ""
+        status_code: 201
+      loop:
+        - name: Apply All
+          playbook: playbooks/apply_all.yml
+          description: Reconcile all Incus application definitions
+        - name: Update All
+          playbook: playbooks/update_all.yml
+          description: Refresh images and update system packages
+      loop_control:
+        label: "{{ item.name }}"
+      when: item.name not in (_semaphore_templates.json | map(attribute='name') | list)
+      changed_when: true
+      no_log: true
+
+    - name: Reload Semaphore templates
+      ansible.builtin.uri:
+        url: >-
+          {{ _semaphore_url }}/api/project/{{ _gitops_project_id }}/templates?sort=name&order=asc
+        headers:
+          Cookie: "{{ _semaphore_login.cookies_string }}"
+        status_code: 200
+      register: _semaphore_templates_current
+      no_log: true
+
+    - name: Select the Apply All template
+      ansible.builtin.set_fact:
+        _apply_all_template_id: >-
+          {{ (_semaphore_templates_current.json |
+              selectattr('name', 'equalto', 'Apply All') | first).id }}
+
+    - name: List Semaphore integrations
+      ansible.builtin.uri:
+        url: >-
+          {{ _semaphore_url }}/api/project/{{ _gitops_project_id }}/integrations
+        headers:
+          Cookie: "{{ _semaphore_login.cookies_string }}"
+        status_code: 200
+      register: _semaphore_integrations
+      no_log: true
+
+    - name: Create the Gitea push integration
+      ansible.builtin.uri:
+        url: >-
+          {{ _semaphore_url }}/api/project/{{ _gitops_project_id }}/integrations
+        method: POST
+        headers:
+          Cookie: "{{ _semaphore_login.cookies_string }}"
+        body_format: json
+        body:
+          name: Gitea Push
+          project_id: "{{ _gitops_project_id }}"
+          template_id: "{{ _apply_all_template_id }}"
+          auth_method: hmac
+          auth_secret_id: "{{ _gitea_hmac_key_id }}"
+          auth_header: X-Gitea-Signature
+          searchable: false
+        status_code: 201
+      when: >-
+        'Gitea Push' not in
+        (_semaphore_integrations.json | map(attribute='name') | list)
+      changed_when: true
+      no_log: true
+
+    - name: Reload Semaphore integrations
+      ansible.builtin.uri:
+        url: >-
+          {{ _semaphore_url }}/api/project/{{ _gitops_project_id }}/integrations
+        headers:
+          Cookie: "{{ _semaphore_login.cookies_string }}"
+        status_code: 200
+      register: _semaphore_integrations_current
+      no_log: true
+
+    - name: Select the Gitea push integration
+      ansible.builtin.set_fact:
+        _gitea_integration_id: >-
+          {{ (_semaphore_integrations_current.json |
+              selectattr('name', 'equalto', 'Gitea Push') | first).id }}
+
+    - name: List Gitea integration aliases
+      ansible.builtin.uri:
+        url: >-
+          {{ _semaphore_url }}/api/project/{{ _gitops_project_id
+          }}/integrations/{{ _gitea_integration_id }}/aliases
+        headers:
+          Cookie: "{{ _semaphore_login.cookies_string }}"
+        status_code: 200
+      register: _semaphore_aliases
+      no_log: true
+
+    - name: Create a Gitea integration alias
+      ansible.builtin.uri:
+        url: >-
+          {{ _semaphore_url }}/api/project/{{ _gitops_project_id
+          }}/integrations/{{ _gitea_integration_id }}/aliases
+        method: POST
+        headers:
+          Cookie: "{{ _semaphore_login.cookies_string }}"
+        body_format: json
+        body: {}
+        status_code: 200
+      when: _semaphore_aliases.json | length == 0
+      changed_when: true
+      no_log: true
+
+    - name: Reload Gitea integration aliases
+      ansible.builtin.uri:
+        url: >-
+          {{ _semaphore_url }}/api/project/{{ _gitops_project_id
+          }}/integrations/{{ _gitea_integration_id }}/aliases
+        headers:
+          Cookie: "{{ _semaphore_login.cookies_string }}"
+        status_code: 200
+      register: _semaphore_aliases_current
+      no_log: true
+
+    - name: Select the internally reachable Gitea integration URL
+      ansible.builtin.set_fact:
+        _gitea_integration_url: >-
+          {{ (_semaphore_aliases_current.json | first).url |
+             regex_replace('^https?://[^/]+', semaphore_bootstrap_url) }}
+      no_log: true
+
+    - name: List Gitea repository webhooks
+      ansible.builtin.uri:
+        url: >-
+          {{ _gitea_url }}/api/v1/repos/{{ lab_gitea_admin_username
+          }}/{{ gitea_repository_name }}/hooks
+        headers:
+          Authorization: "token {{ lab_gitea_api_token }}"
+        status_code: 200
+      register: _gitea_hooks
+      no_log: true
+
+    - name: Select the managed Gitea webhook
+      ansible.builtin.set_fact:
+        _gitea_managed_hooks: >-
+          {{ _gitea_hooks.json |
+             selectattr('name', 'equalto', 'Semaphore Apply All') |
+             sort(attribute='id') | list }}
+      no_log: true
+
+    - name: Create the Gitea to Semaphore webhook
+      ansible.builtin.uri:
+        url: >-
+          {{ _gitea_url }}/api/v1/repos/{{ lab_gitea_admin_username
+          }}/{{ gitea_repository_name }}/hooks
+        method: POST
+        headers:
+          Authorization: "token {{ lab_gitea_api_token }}"
+        body_format: json
+        body:
+          type: gitea
+          name: Semaphore Apply All
+          active: true
+          branch_filter: "{{ gitops_branch }}"
+          events:
+            - push
+          config:
+            url: "{{ _gitea_integration_url }}"
+            content_type: json
+            secret: "{{ lab_gitea_webhook_secret }}"
+        status_code: 201
+      when: _gitea_managed_hooks | length == 0
+      changed_when: true
+      no_log: true
+
+    - name: Update the Gitea to Semaphore webhook
+      ansible.builtin.uri:
+        url: >-
+          {{ _gitea_url }}/api/v1/repos/{{ lab_gitea_admin_username
+          }}/{{ gitea_repository_name }}/hooks/{{ (_gitea_managed_hooks | first).id }}
+        method: PATCH
+        headers:
+          Authorization: "token {{ lab_gitea_api_token }}"
+        body_format: json
+        body:
+          name: Semaphore Apply All
+          active: true
+          branch_filter: "{{ gitops_branch }}"
+          events:
+            - push
+          config:
+            url: "{{ _gitea_integration_url }}"
+            content_type: json
+            secret: "{{ lab_gitea_webhook_secret }}"
+        status_code: 200
+      when: _gitea_managed_hooks | length > 0
+      changed_when: true
+      no_log: true
+
+    - name: Remove redundant managed Gitea webhooks
+      ansible.builtin.uri:
+        url: >-
+          {{ _gitea_url }}/api/v1/repos/{{ lab_gitea_admin_username
+          }}/{{ gitea_repository_name }}/hooks/{{ item.id }}
+        method: DELETE
+        headers:
+          Authorization: "token {{ lab_gitea_api_token }}"
+        status_code: 204
+      loop: "{{ _gitea_managed_hooks[1:] }}"
+      loop_control:
+        label: "{{ item.id }}"
+      changed_when: true
+      no_log: true
+
+    - name: Log out of Semaphore
+      ansible.builtin.uri:
+        url: "{{ _semaphore_url }}/api/auth/logout"
+        method: POST
+        headers:
+          Cookie: "{{ _semaphore_login.cookies_string }}"
+        status_code: 204
+      no_log: true

@@ -1,0 +1,50 @@
+---
+# Copy this file to group_vars/all/lab.yml and replace every value marked
+# CHANGE_ME. This file contains configuration only; bootstrap generates secrets.
+
+lab_name: incus-lab
+
+incus_remote: local
+incus_api_url: https://CHANGE_ME:8443
+incus_host_address: CHANGE_ME
+incus_default_storage_pool: default
+incus_validate_certs: false
+incus_app_network_prefix: 10.210
+
+# Paths belonging to the already-trusted Incus CLI identity on the Ansible
+# controller. INCUS_CLIENT_CERT_PATH, INCUS_CLIENT_KEY_PATH, and
+# INCUS_SERVER_CERT_PATH take precedence when exported.
+incus_controller_client_cert_path: CHANGE_ME
+incus_controller_client_key_path: CHANGE_ME
+incus_controller_server_cert_path: CHANGE_ME
+
+# These names only need to resolve for browsers on the LAN. The default
+# internal TLS mode does not require a public DNS provider or API token.
+lab_domain: lab.example.net
+incus_ingress_domains:
+  - name: lab.example.net
+    tls_mode: internal
+incus_ingress_email: admin@example.net
+
+gitea_admin_username: admin
+gitea_admin_email: admin@example.net
+gitea_repository_name: incus-apps
+gitea_repository_private: true
+
+semaphore_admin_username: admin
+semaphore_admin_email: admin@example.net
+
+# Bootstrap preserves the public clone as this read-only upstream remote and
+# makes the private Gitea repository the origin.
+gitops_branch: main
+gitops_upstream_remote: upstream
+gitops_origin_remote: origin
+
+# Raw host listeners used only for bootstrap and recovery. Change them when
+# they collide with another host service.
+gitea_bootstrap_port: 3001
+semaphore_bootstrap_port: 3002
+
+# Optional. Set this in the interactive bootstrap environment only when one of
+# incus_ingress_domains uses tls_mode: cloudflare. Never place the token here.
+# INCUS_APPS_CLOUDFLARE_API_TOKEN is read by bootstrap and stored in OpenBao.

@@ -1,0 +1,42 @@
+---
+- name: Unseal OpenBao from the encrypted Ansible Vault recovery file
+  hosts: incus_api
+  gather_facts: false
+
+  tasks:
+    - name: Load the encrypted OpenBao recovery identity
+      ansible.builtin.include_vars:
+        file: "{{ openbao_recovery_vault_path }}"
+        name: _openbao_recovery
+      no_log: true
+
+    - name: Read the OpenBao lifecycle state inside its container
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8200/v1/sys/health
+        status_code: [200, 429, 472, 473, 501, 503]
+      delegate_to: openbao
+      register: _openbao_internal_health
+
+    - name: Require an initialized OpenBao service
+      ansible.builtin.assert:
+        that:
+          - _openbao_internal_health.json.initialized | bool
+        fail_msg: OpenBao is not initialized; run playbooks/bootstrap_lab.yml.
+
+    - name: Submit the encrypted recovery vault's unseal key
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8200/v1/sys/unseal
+        method: POST
+        body_format: json
+        body:
+          key: "{{ _openbao_recovery.openbao_unseal_key }}"
+        status_code: 200
+      delegate_to: openbao
+      when: _openbao_internal_health.json.sealed | bool
+      no_log: true
+
+    - name: Verify OpenBao is active
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8200/v1/sys/health?standbyok=true
+        status_code: 200
+      delegate_to: openbao

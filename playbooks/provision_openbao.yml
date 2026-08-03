@@ -1,0 +1,19 @@
+---
+- name: Bootstrap Python inside the OpenBao system container
+  hosts: openbao
+  gather_facts: false
+
+  tasks:
+    - name: Install Python for Ansible modules
+      ansible.builtin.raw: >-
+        test -x /usr/bin/python3 ||
+        (export DEBIAN_FRONTEND=noninteractive &&
+        apt-get update && apt-get install -y python3 python3-apt)
+      changed_when: false
+
+- name: Provision the OpenBao service
+  hosts: openbao
+  gather_facts: true
+
+  roles:
+    - role: openbao

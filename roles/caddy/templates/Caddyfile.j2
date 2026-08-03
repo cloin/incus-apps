@@ -1,0 +1,34 @@
+{
+	admin 127.0.0.1:2019
+{% if caddy_ingress_email | length > 0 %}
+	email {{ caddy_ingress_email }}
+{% endif %}
+}
+
+{% for domain in caddy_ingress_domains %}
+*.{{ domain.name }} {
+{% if domain.tls_mode == 'cloudflare' %}
+	tls {
+		dns cloudflare {env.CF_API_TOKEN}
+		resolvers 1.1.1.1 1.0.0.1
+	}
+{% else %}
+	tls internal
+{% endif %}
+
+	encode zstd gzip
+
+{% for route in caddy_ingress_routes %}
+{% if route.host | regex_search('\\.' ~ (domain.name | regex_escape) ~ '$') %}
+	@route_{{ loop.index }} host {{ route.host }}
+	handle @route_{{ loop.index }} {
+		reverse_proxy {{ route.scheme }}://{{ route.address }}:{{ route.port }}
+	}
+
+{% endif %}
+{% endfor %}
+	handle {
+		respond "No ingress route for this host" 404
+	}
+}
+{% endfor %}

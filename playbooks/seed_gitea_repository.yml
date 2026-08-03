@@ -1,0 +1,208 @@
+---
+- name: Seed the personalized checkout into private Gitea
+  hosts: incus_api
+  gather_facts: false
+
+  vars:
+    _checkout_path: "{{ playbook_dir }}/.."
+    _gitea_internal_repository_url: >-
+      {{ gitea_bootstrap_url }}/{{ lab_gitea_admin_username }}/{{ gitea_repository_name }}.git
+    _gitea_public_repository_url: >-
+      {{ gitea_public_url }}/{{ lab_gitea_admin_username }}/{{ gitea_repository_name }}.git
+
+  pre_tasks:
+    - name: Load application secrets from OpenBao
+      ansible.builtin.include_tasks: tasks/load_openbao_secrets.yml
+
+    - name: Load the application catalog
+      ansible.builtin.include_tasks: tasks/load_catalog.yml
+
+  tasks:
+    - name: Require the personalized configuration and encrypted recovery vault
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ _checkout_path }}/group_vars/all/lab.yml"
+        - "{{ openbao_recovery_vault_path }}"
+      register: _gitops_seed_files
+
+    - name: Validate files required by the private repository
+      ansible.builtin.assert:
+        that:
+          - _gitops_seed_files.results | map(attribute='stat.exists') | min
+        fail_msg: >-
+          The personalized group_vars/all/lab.yml or encrypted recovery vault
+          is missing; refusing to create an incomplete private source of truth.
+
+    - name: Verify the recovery file is Ansible Vault ciphertext
+      ansible.builtin.command:
+        argv:
+          - head
+          - -n
+          - "1"
+          - "{{ openbao_recovery_vault_path }}"
+      register: _recovery_vault_header
+      changed_when: false
+      failed_when: >-
+        not _recovery_vault_header.stdout.startswith('$ANSIBLE_VAULT;')
+
+    - name: List checkout Git remotes
+      ansible.builtin.command:
+        argv:
+          - git
+          - remote
+      args:
+        chdir: "{{ _checkout_path }}"
+      register: _git_remotes
+      changed_when: false
+
+    - name: Read the current origin URL
+      ansible.builtin.command:
+        argv:
+          - git
+          - remote
+          - get-url
+          - "{{ gitops_origin_remote }}"
+      args:
+        chdir: "{{ _checkout_path }}"
+      register: _git_origin_url
+      changed_when: false
+      failed_when: false
+
+    - name: Preserve the public template as the upstream remote
+      ansible.builtin.command:
+        argv:
+          - git
+          - remote
+          - rename
+          - "{{ gitops_origin_remote }}"
+          - "{{ gitops_upstream_remote }}"
+      args:
+        chdir: "{{ _checkout_path }}"
+      when:
+        - gitops_origin_remote in _git_remotes.stdout_lines
+        - gitops_upstream_remote not in _git_remotes.stdout_lines
+        - _git_origin_url.stdout != _gitea_public_repository_url
+      changed_when: true
+
+    - name: Disable accidental pushes to the public upstream
+      ansible.builtin.command:
+        argv:
+          - git
+          - remote
+          - set-url
+          - --push
+          - "{{ gitops_upstream_remote }}"
+          - DISABLED
+      args:
+        chdir: "{{ _checkout_path }}"
+      when: >-
+        gitops_upstream_remote in _git_remotes.stdout_lines or
+        (gitops_origin_remote in _git_remotes.stdout_lines and
+         _git_origin_url.stdout != _gitea_public_repository_url)
+      changed_when: true
+
+    - name: Reload checkout Git remotes
+      ansible.builtin.command:
+        argv:
+          - git
+          - remote
+      args:
+        chdir: "{{ _checkout_path }}"
+      register: _git_remotes_current
+      changed_when: false
+
+    - name: Add the private Gitea origin
+      ansible.builtin.command:
+        argv:
+          - git
+          - remote
+          - add
+          - "{{ gitops_origin_remote }}"
+          - "{{ _gitea_internal_repository_url }}"
+      args:
+        chdir: "{{ _checkout_path }}"
+      when: gitops_origin_remote not in _git_remotes_current.stdout_lines
+      changed_when: true
+
+    - name: Select the internal Gitea origin for bootstrap
+      ansible.builtin.command:
+        argv:
+          - git
+          - remote
+          - set-url
+          - "{{ gitops_origin_remote }}"
+          - "{{ _gitea_internal_repository_url }}"
+      args:
+        chdir: "{{ _checkout_path }}"
+      changed_when: true
+
+    - name: Stage the personalized GitOps checkout
+      ansible.builtin.command:
+        argv:
+          - git
+          - add
+          - --all
+      args:
+        chdir: "{{ _checkout_path }}"
+      changed_when: true
+
+    - name: Inspect staged personalized configuration
+      ansible.builtin.command:
+        argv:
+          - git
+          - diff
+          - --cached
+          - --quiet
+      args:
+        chdir: "{{ _checkout_path }}"
+      register: _git_staged_changes
+      changed_when: false
+      failed_when: _git_staged_changes.rc not in [0, 1]
+
+    - name: Commit the personalized lab source of truth
+      ansible.builtin.command:
+        argv:
+          - git
+          - -c
+          - user.name=incus-apps-bootstrap
+          - -c
+          - user.email=incus-apps@localhost
+          - commit
+          - -m
+          - Initialize private Incus lab configuration
+      args:
+        chdir: "{{ _checkout_path }}"
+      when: _git_staged_changes.rc == 1
+      changed_when: true
+
+    - name: Push the checkout to private Gitea without persisting credentials
+      ansible.builtin.command:
+        argv:
+          - git
+          - push
+          - --set-upstream
+          - "{{ gitops_origin_remote }}"
+          - "{{ gitops_branch }}"
+      args:
+        chdir: "{{ _checkout_path }}"
+      environment:
+        GIT_CONFIG_COUNT: "1"
+        GIT_CONFIG_KEY_0: http.extraHeader
+        GIT_CONFIG_VALUE_0: >-
+          Authorization: Basic
+          {{ (lab_gitea_admin_username ~ ':' ~ lab_gitea_api_token) | b64encode }}
+      changed_when: true
+      no_log: true
+
+    - name: Point origin at the user-facing Gitea route
+      ansible.builtin.command:
+        argv:
+          - git
+          - remote
+          - set-url
+          - "{{ gitops_origin_remote }}"
+          - "{{ _gitea_public_repository_url }}"
+      args:
+        chdir: "{{ _checkout_path }}"
+      changed_when: true

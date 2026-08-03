@@ -1,0 +1,238 @@
+---
+- name: Bootstrap Gitea for Incus application GitOps
+  hosts: incus_api
+  gather_facts: false
+
+  vars:
+    _gitea_url: "{{ gitea_bootstrap_url }}"
+    _gitea_instance: git
+    _gitea_token_name: incus-apps-controller
+    _openbao_management_url: http://127.0.0.1:8200
+
+  pre_tasks:
+    - name: Load application secrets from OpenBao
+      ansible.builtin.include_tasks: tasks/load_openbao_secrets.yml
+
+    - name: Load the application catalog
+      ansible.builtin.include_tasks: tasks/load_catalog.yml
+
+  tasks:
+    - name: Wait for the Gitea API
+      ansible.builtin.uri:
+        url: "{{ _gitea_url }}/api/healthz"
+        status_code: 200
+      register: _gitea_health
+      retries: 30
+      delay: 2
+      until: _gitea_health.status == 200
+
+    - name: List Gitea users
+      ansible.builtin.command:
+        argv:
+          - incus
+          - exec
+          - "{{ incus_remote }}:{{ _gitea_instance }}"
+          - --project
+          - gitea
+          - --user
+          - "1000"
+          - --
+          - gitea
+          - admin
+          - user
+          - list
+          - --config
+          - /data/gitea/conf/app.ini
+      register: _gitea_users
+      changed_when: false
+
+    - name: Create the Gitea administrator
+      ansible.builtin.command:
+        argv:
+          - incus
+          - exec
+          - "{{ incus_remote }}:{{ _gitea_instance }}"
+          - --project
+          - gitea
+          - --user
+          - "1000"
+          - --
+          - gitea
+          - admin
+          - user
+          - create
+          - --username
+          - "{{ lab_gitea_admin_username }}"
+          - --password
+          - "{{ lab_gitea_admin_password }}"
+          - --email
+          - "{{ lab_gitea_admin_email }}"
+          - --admin
+          - --must-change-password=false
+          - --config
+          - /data/gitea/conf/app.ini
+      when: lab_gitea_admin_username not in _gitea_users.stdout
+      changed_when: true
+      no_log: true
+
+    - name: Verify an existing controller access token
+      ansible.builtin.uri:
+        url: "{{ _gitea_url }}/api/v1/user"
+        headers:
+          Authorization: "token {{ lab_gitea_api_token | default('') }}"
+        status_code: [200, 401]
+      register: _gitea_existing_token_check
+      when: lab_gitea_api_token | default('') | length > 0
+      no_log: true
+
+    - name: Decide whether Gitea needs a controller access token
+      ansible.builtin.set_fact:
+        _gitea_create_controller_token: >-
+          {{ lab_gitea_api_token | default('') | length == 0 or
+             (_gitea_existing_token_check.status | default(401)) != 200 }}
+      no_log: true
+
+    - name: List Gitea access tokens
+      ansible.builtin.uri:
+        url: >-
+          {{ _gitea_url }}/api/v1/users/{{ lab_gitea_admin_username | urlencode }}/tokens
+        url_username: "{{ lab_gitea_admin_username }}"
+        url_password: "{{ lab_gitea_admin_password }}"
+        force_basic_auth: true
+        status_code: 200
+      register: _gitea_tokens
+      when: _gitea_create_controller_token | bool
+      no_log: true
+
+    - name: Remove unrecoverable controller access tokens
+      ansible.builtin.uri:
+        url: >-
+          {{ _gitea_url }}/api/v1/users/{{ lab_gitea_admin_username | urlencode
+          }}/tokens/{{ item.id }}
+        method: DELETE
+        url_username: "{{ lab_gitea_admin_username }}"
+        url_password: "{{ lab_gitea_admin_password }}"
+        force_basic_auth: true
+        status_code: 204
+      loop: >-
+        {{ _gitea_tokens.json | default([]) |
+           selectattr('name', 'equalto', _gitea_token_name) | list }}
+      loop_control:
+        label: "{{ item.id }}"
+      when: _gitea_create_controller_token | bool
+      no_log: true
+
+    - name: Create the Gitea controller access token
+      ansible.builtin.uri:
+        url: >-
+          {{ _gitea_url }}/api/v1/users/{{ lab_gitea_admin_username | urlencode }}/tokens
+        method: POST
+        url_username: "{{ lab_gitea_admin_username }}"
+        url_password: "{{ lab_gitea_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          name: "{{ _gitea_token_name }}"
+        status_code: 201
+      register: _gitea_new_token
+      when: _gitea_create_controller_token | bool
+      no_log: true
+
+    - name: Select the active Gitea controller access token
+      ansible.builtin.set_fact:
+        lab_gitea_api_token: >-
+          {{ _gitea_new_token.json.sha1
+             if _gitea_create_controller_token | bool
+             else lab_gitea_api_token }}
+      no_log: true
+
+    - name: Log in to OpenBao to persist a newly issued Gitea token
+      ansible.builtin.uri:
+        url: >-
+          {{ _openbao_management_url }}/v1/auth/userpass/login/{{ openbao_operator_username }}
+        method: POST
+        body_format: json
+        body:
+          password: "{{ _openbao_recovery.openbao_operator_password }}"
+        status_code: 200
+      delegate_to: openbao
+      register: _openbao_gitea_login
+      when: _gitea_create_controller_token | bool
+      no_log: true
+
+    - name: Read the current Gitea OpenBao group
+      ansible.builtin.uri:
+        url: >-
+          {{ _openbao_management_url }}/v1/{{ openbao_kv_mount }}/data/incus-apps/gitea
+        headers:
+          X-Vault-Token: "{{ _openbao_gitea_login.json.auth.client_token }}"
+        status_code: 200
+      delegate_to: openbao
+      register: _openbao_gitea_group
+      when: _gitea_create_controller_token | bool
+      no_log: true
+
+    - name: Persist the new Gitea token in OpenBao
+      ansible.builtin.uri:
+        url: >-
+          {{ _openbao_management_url }}/v1/{{ openbao_kv_mount }}/data/incus-apps/gitea
+        method: POST
+        headers:
+          X-Vault-Token: "{{ _openbao_gitea_login.json.auth.client_token }}"
+        body_format: json
+        body:
+          data: >-
+            {{ _openbao_gitea_group.json.data.data |
+               combine({'lab_gitea_api_token': lab_gitea_api_token}) }}
+        status_code: 200
+      delegate_to: openbao
+      when: _gitea_create_controller_token | bool
+      no_log: true
+
+    - name: Revoke the Gitea secret-write token
+      ansible.builtin.uri:
+        url: "{{ _openbao_management_url }}/v1/auth/token/revoke-self"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ _openbao_gitea_login.json.auth.client_token }}"
+        status_code: 204
+      delegate_to: openbao
+      when: _gitea_create_controller_token | bool
+      no_log: true
+
+    - name: Inspect the private Incus applications repository
+      ansible.builtin.uri:
+        url: >-
+          {{ _gitea_url }}/api/v1/repos/{{ lab_gitea_admin_username | urlencode
+          }}/{{ gitea_repository_name | urlencode }}
+        headers:
+          Authorization: "token {{ lab_gitea_api_token }}"
+        status_code: [200, 404]
+      register: _gitea_repository
+      no_log: true
+
+    - name: Create the private Incus applications repository
+      ansible.builtin.uri:
+        url: "{{ _gitea_url }}/api/v1/user/repos"
+        method: POST
+        headers:
+          Authorization: "token {{ lab_gitea_api_token }}"
+        body_format: json
+        body:
+          name: "{{ gitea_repository_name }}"
+          description: GitOps definitions and Ansible roles for Incus applications
+          private: "{{ gitea_repository_private | bool }}"
+          auto_init: false
+          default_branch: "{{ gitops_branch }}"
+        status_code: 201
+      when: _gitea_repository.status == 404
+      changed_when: true
+      no_log: true
+
+    - name: Verify the active Gitea controller access token
+      ansible.builtin.uri:
+        url: "{{ _gitea_url }}/api/v1/user"
+        headers:
+          Authorization: "token {{ lab_gitea_api_token }}"
+        status_code: 200
+      no_log: true

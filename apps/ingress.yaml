@@ -1,0 +1,69 @@
+---
+application:
+  name: ingress
+  state: present
+  description: Shared Caddy ingress for HTTP application routes
+
+  defaults:
+    storage_pool: "{{ incus_default_storage_pool }}"
+    network: ingress
+    profiles: []
+
+services:
+  caddy:
+    kind: system-container
+    image: images:debian/13
+    root_size: 8GiB
+    recreate_on_source_change: false
+
+    update:
+      strategy: packages
+      command:
+        - sh
+        - -lc
+        - >-
+          export DEBIAN_FRONTEND=noninteractive;
+          apt-get update && apt-get -y dist-upgrade
+
+    volumes:
+      data: /var/lib/caddy
+
+    expose:
+      - name: http
+        protocol: tcp
+        listen_port: 80
+        target_port: 80
+      - name: https
+        protocol: tcp
+        listen_port: 443
+        target_port: 443
+
+    config:
+      limits.cpu: "2"
+      limits.memory: 1GiB
+
+networks:
+  ingress:
+    name: ingress
+    type: bridge
+    config:
+      ipv4.address: "{{ incus_app_network_prefix }}.250.1/24"
+      ipv4.nat: true
+      ipv4.dhcp: true
+      ipv4.dhcp.ranges: >-
+        {{ incus_app_network_prefix }}.250.10-{{ incus_app_network_prefix }}.250.254
+      ipv6.address: none
+      dns.domain: ingress.internal
+
+volumes:
+  data:
+    size: 5GiB
+    retain: true
+    config:
+      snapshots.schedule: "@daily"
+      snapshots.expiry: 14d
+
+secrets:
+  - path: incus-apps/ingress
+    required: []
+    optional: true

@@ -1,0 +1,12 @@
+---
+caddy_version: 2.11.4
+caddy_ingress_routes: []
+caddy_ingress_domains:
+  - name: lab.example.net
+    tls_mode: internal
+caddy_ingress_email: ""
+caddy_cloudflare_api_token: ""
+caddy_cloudflare_module: github.com/caddy-dns/cloudflare
+caddy_config_path: /etc/caddy/Caddyfile
+caddy_environment_path: /etc/caddy/environment
+caddy_data_path: /var/lib/caddy

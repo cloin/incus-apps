@@ -1,0 +1,134 @@
+---
+- name: Validate the clean-room Incus lab inputs
+  hosts: incus_api
+  gather_facts: false
+
+  vars:
+    _lab_configuration_path: "{{ playbook_dir }}/../group_vars/all/lab.yml"
+
+  tasks:
+    - name: Inspect the personalized lab configuration
+      ansible.builtin.stat:
+        path: "{{ _lab_configuration_path }}"
+      register: _lab_configuration
+
+    - name: Require a personalized lab configuration
+      ansible.builtin.assert:
+        that:
+          - _lab_configuration.stat.exists
+        fail_msg: >-
+          Copy config/lab.example.yml to group_vars/all/lab.yml and replace all
+          CHANGE_ME values before running bootstrap.
+
+    - name: Validate required lab configuration
+      ansible.builtin.assert:
+        that:
+          - lab_name | default('') is match('^[a-z0-9][a-z0-9-]*$')
+          - incus_remote | default('') | length > 0
+          - incus_api_url | default('') is match('^https://')
+          - incus_host_address | default('') | incus_app_is_ipv4_address
+          - incus_default_storage_pool | default('') | length > 0
+          - >-
+            incus_app_network_prefix | default('') |
+            incus_app_is_private_ipv4_prefix
+          - lab_domain | default('') is match('^[a-z0-9][a-z0-9.-]+$')
+          - incus_ingress_domains is sequence
+          - incus_ingress_domains is not string
+          - incus_ingress_domains | length > 0
+          - gitea_admin_username | default('') is match('^[a-zA-Z0-9_.-]+$')
+          - gitea_admin_email | default('') is match('^[^@]+@[^@]+$')
+          - semaphore_admin_username | default('') is match('^[a-zA-Z0-9_.-]+$')
+          - semaphore_admin_email | default('') is match('^[^@]+@[^@]+$')
+          - gitops_branch | default('') | length > 0
+          - "'CHANGE_ME' not in (lookup('ansible.builtin.file', _lab_configuration_path))"
+        fail_msg: >-
+          group_vars/all/lab.yml contains an invalid value or an unresolved
+          CHANGE_ME placeholder.
+
+    - name: Validate ingress domain declarations
+      ansible.builtin.assert:
+        that:
+          - item is mapping
+          - item.name | default('') is match('^[a-z0-9][a-z0-9.-]+$')
+          - item.tls_mode | default('') in ['internal', 'cloudflare']
+        fail_msg: >-
+          Each incus_ingress_domains item needs a valid name and a tls_mode of
+          internal or cloudflare.
+      loop: "{{ incus_ingress_domains }}"
+      loop_control:
+        label: "{{ item.name | default('invalid domain') }}"
+
+    - name: Validate ingress domain coverage and uniqueness
+      ansible.builtin.assert:
+        that:
+          - >-
+            lab_domain in
+            (incus_ingress_domains | map(attribute='name') | list)
+          - >-
+            incus_ingress_domains | map(attribute='name') | unique | list |
+            length == incus_ingress_domains | length
+        fail_msg: >-
+          lab_domain must be declared exactly once in incus_ingress_domains,
+          and every ingress domain name must be unique.
+
+    - name: Inspect Incus controller credential files
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ incus_client_cert_path }}"
+        - "{{ incus_client_key_path }}"
+        - "{{ incus_server_cert_path }}"
+      register: _incus_controller_credentials
+      no_log: true
+
+    - name: Require the trusted Incus controller identity
+      ansible.builtin.assert:
+        that:
+          - _incus_controller_credentials.results | map(attribute='stat.exists') | min
+        fail_msg: >-
+          The configured Incus client certificate, client key, or pinned server
+          certificate does not exist on the Ansible controller.
+
+    - name: Verify the configured Incus remote
+      ansible.builtin.command:
+        argv:
+          - incus
+          - info
+          - "{{ incus_remote }}:"
+      changed_when: false
+
+    - name: Inspect Incus storage pools
+      ansible.builtin.command:
+        argv:
+          - incus
+          - storage
+          - list
+          - "{{ incus_remote }}:"
+          - --format
+          - json
+      register: _incus_storage_pools
+      changed_when: false
+
+    - name: Require the configured Incus storage pool
+      ansible.builtin.assert:
+        that:
+          - >-
+            incus_default_storage_pool in
+            (_incus_storage_pools.stdout | from_json | map(attribute='name') | list)
+        fail_msg: >-
+          Incus storage pool {{ incus_default_storage_pool }} does not exist on
+          remote {{ incus_remote }}.
+
+    - name: Validate bootstrap port uniqueness
+      ansible.builtin.assert:
+        that:
+          - gitea_bootstrap_port | int >= 1
+          - gitea_bootstrap_port | int <= 65535
+          - semaphore_bootstrap_port | int >= 1
+          - semaphore_bootstrap_port | int <= 65535
+          - gitea_bootstrap_port | int != semaphore_bootstrap_port | int
+          - gitea_bootstrap_port | int not in [80, 443, 2222]
+          - semaphore_bootstrap_port | int not in [80, 443, 2222]
+        fail_msg: >-
+          Gitea, Semaphore, HTTP, HTTPS, and Gitea SSH listeners must use
+          distinct valid ports.

@@ -1,0 +1,64 @@
+---
+application:
+  name: openbao
+  state: present
+  description: OpenBao secrets service for Incus application automation
+
+  defaults:
+    storage_pool: "{{ incus_default_storage_pool }}"
+    network: private
+    profiles: []
+
+services:
+  openbao:
+    kind: system-container
+    image: images:debian/13
+    root_size: 8GiB
+    recreate_on_source_change: false
+    network_manager: systemd-networkd
+
+    update:
+      strategy: packages
+      command:
+        - sh
+        - -lc
+        - >-
+          export DEBIAN_FRONTEND=noninteractive;
+          apt-get update && apt-get -y dist-upgrade
+
+    volumes:
+      data: /var/lib/openbao
+
+    networks:
+      - name: private
+      - name: ingress
+
+    ingress:
+      - host: "{{ openbao_hostname }}"
+        port: 8200
+        scheme: http
+
+    config:
+      limits.cpu: "2"
+      limits.memory: 2GiB
+
+networks:
+  private:
+    type: bridge
+    config:
+      ipv4.address: "{{ incus_app_network_prefix }}.4.1/24"
+      ipv4.nat: true
+      ipv6.address: none
+      dns.domain: openbao.internal
+
+  ingress:
+    external: true
+    name: ingress
+
+volumes:
+  data:
+    size: 10GiB
+    retain: true
+    config:
+      snapshots.schedule: "@daily"
+      snapshots.expiry: 30d

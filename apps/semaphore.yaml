@@ -1,0 +1,83 @@
+---
+application:
+  name: semaphore
+  state: present
+  description: Semaphore UI GitOps controller
+
+  defaults:
+    storage_pool: "{{ incus_default_storage_pool }}"
+    network: private
+    profiles: []
+services:
+  semaphore:
+    kind: system-container
+    image: images:debian/13
+    root_size: 12GiB
+    recreate_on_source_change: false
+    network_manager: systemd-networkd
+
+    update:
+      strategy: packages
+      command:
+        - sh
+        - -lc
+        - >-
+          export DEBIAN_FRONTEND=noninteractive;
+          apt-get update && apt-get -y dist-upgrade
+
+    volumes:
+      data: /var/lib/semaphore
+
+    networks:
+      - name: private
+      - name: ingress
+
+    ingress:
+      - host: "{{ semaphore_hostname }}"
+        port: 3000
+        scheme: http
+
+    # Ansible uses this managed listener for bootstrap/runtime health checks.
+    expose:
+      - name: legacy-http
+        protocol: tcp
+        listen_port: "{{ semaphore_bootstrap_port }}"
+        target_port: 3000
+
+    config:
+      limits.cpu: "2"
+      limits.memory: 3GiB
+
+networks:
+  private:
+    type: bridge
+    config:
+      ipv4.address: "{{ incus_app_network_prefix }}.3.1/24"
+      ipv4.nat: true
+      ipv6.address: none
+      dns.domain: semaphore.internal
+
+  ingress:
+    external: true
+    name: ingress
+
+volumes:
+  data:
+    size: 10GiB
+    retain: true
+    config:
+      snapshots.schedule: "@daily"
+      snapshots.expiry: 14d
+
+secrets:
+  - path: incus-apps/semaphore
+    required:
+      - lab_semaphore_admin_username
+      - lab_semaphore_admin_password
+      - lab_semaphore_admin_email
+      - lab_semaphore_cookie_hash
+      - lab_semaphore_cookie_encryption
+      - lab_semaphore_access_key_encryption
+      - lab_semaphore_incus_client_cert
+      - lab_semaphore_incus_client_key
+      - lab_semaphore_incus_server_cert

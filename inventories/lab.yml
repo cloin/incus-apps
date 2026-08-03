@@ -1,0 +1,24 @@
+---
+all:
+  hosts:
+    incus_api:
+      ansible_connection: local
+      ansible_python_interpreter: "{{ ansible_playbook_python }}"
+    semaphore:
+      ansible_connection: community.general.incus
+      ansible_host: semaphore
+      ansible_incus_remote: "{{ incus_remote }}"
+      ansible_incus_project: semaphore
+      ansible_user: root
+    caddy:
+      ansible_connection: community.general.incus
+      ansible_host: caddy
+      ansible_incus_remote: "{{ incus_remote }}"
+      ansible_incus_project: ingress
+      ansible_user: root
+    openbao:
+      ansible_connection: community.general.incus
+      ansible_host: openbao
+      ansible_incus_remote: "{{ incus_remote }}"
+      ansible_incus_project: openbao
+      ansible_user: root

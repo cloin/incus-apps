@@ -1,0 +1,644 @@
+---
+- name: Initialize OpenBao and seed platform credentials
+  hosts: incus_api
+  gather_facts: false
+
+  vars:
+    _openbao_management_url: http://127.0.0.1:8200
+    _openbao_vault_password: >-
+      {{ lookup('ansible.builtin.env', 'INCUS_APPS_VAULT_PASSWORD') }}
+    _openbao_cloudflare_enabled: >-
+      {{ incus_ingress_domains |
+         selectattr('tls_mode', 'equalto', 'cloudflare') | list | length > 0 }}
+    _openbao_cloudflare_token_input: >-
+      {{ lookup('ansible.builtin.env', 'INCUS_APPS_CLOUDFLARE_API_TOKEN') }}
+    _openbao_semaphore_policy: |
+      path "kv/data/incus-apps/*" {
+        capabilities = ["read"]
+      }
+
+      path "kv/metadata/incus-apps/*" {
+        capabilities = ["read", "list"]
+      }
+    _openbao_operator_policy: |
+      path "kv/config" {
+        capabilities = ["read", "update"]
+      }
+
+      path "kv/data/incus-apps/*" {
+        capabilities = ["create", "read", "update", "delete", "patch"]
+      }
+
+      path "kv/metadata/incus-apps" {
+        capabilities = ["read", "list"]
+      }
+
+      path "kv/metadata/incus-apps/*" {
+        capabilities = ["read", "update", "delete", "list"]
+      }
+
+      path "kv/delete/incus-apps/*" {
+        capabilities = ["update"]
+      }
+
+      path "kv/undelete/incus-apps/*" {
+        capabilities = ["update"]
+      }
+
+      path "kv/destroy/incus-apps/*" {
+        capabilities = ["update"]
+      }
+
+      path "sys/mounts" {
+        capabilities = ["read"]
+      }
+
+      path "sys/mounts/kv" {
+        capabilities = ["create", "read", "update"]
+      }
+
+      path "sys/auth" {
+        capabilities = ["read"]
+      }
+
+      path "sys/auth/userpass" {
+        capabilities = ["create", "read", "update"]
+      }
+
+      path "sys/auth/approle" {
+        capabilities = ["create", "read", "update"]
+      }
+
+      path "sys/policies/acl/incus-apps-*" {
+        capabilities = ["create", "read", "update", "delete"]
+      }
+
+      path "auth/userpass/users/{{ openbao_operator_username }}" {
+        capabilities = ["create", "read", "update"]
+      }
+
+      path "auth/approle/role/{{ openbao_semaphore_role_name }}" {
+        capabilities = ["create", "read", "update"]
+      }
+
+      path "auth/approle/role/{{ openbao_semaphore_role_name }}/*" {
+        capabilities = ["create", "read", "update", "delete", "list"]
+      }
+
+      path "sys/audit" {
+        capabilities = ["read", "sudo"]
+      }
+
+      path "sys/internal/ui/mounts/kv" {
+        capabilities = ["read"]
+      }
+
+  pre_tasks:
+    - name: Require a non-empty Ansible Vault password
+      ansible.builtin.assert:
+        that:
+          - _openbao_vault_password | length >= 12
+        fail_msg: >-
+          Run this playbook through scripts/run-playbook and use an Ansible
+          Vault password of at least 12 characters.
+      no_log: true
+
+    - name: Inspect the OpenBao initialization state
+      ansible.builtin.uri:
+        url: "{{ _openbao_management_url }}/v1/sys/init"
+        status_code: 200
+      delegate_to: openbao
+      register: _openbao_init_status
+
+    - name: Inspect the encrypted OpenBao recovery vault
+      ansible.builtin.stat:
+        path: "{{ openbao_recovery_vault_path }}"
+      delegate_to: localhost
+      register: _openbao_recovery_file
+
+    - name: Require OpenBao and its recovery vault to agree
+      ansible.builtin.assert:
+        that:
+          - >-
+            (_openbao_init_status.json.initialized | bool) ==
+            (_openbao_recovery_file.stat.exists | bool)
+        fail_msg: >-
+          OpenBao initialization state and {{ openbao_recovery_vault_path }} do
+          not agree. Do not initialize or delete anything until the recovery
+          material has been audited.
+
+    - name: Load the existing encrypted recovery identity
+      ansible.builtin.include_vars:
+        file: "{{ openbao_recovery_vault_path }}"
+        name: _openbao_recovery_existing
+      when: _openbao_recovery_file.stat.exists
+      no_log: true
+
+    - name: Initialize OpenBao with a single lab operator share
+      ansible.builtin.uri:
+        url: "{{ _openbao_management_url }}/v1/sys/init"
+        method: POST
+        body_format: json
+        body:
+          secret_shares: 1
+          secret_threshold: 1
+        status_code: 200
+      delegate_to: openbao
+      register: _openbao_initialization
+      when: not (_openbao_init_status.json.initialized | bool)
+      no_log: true
+
+    - name: Generate the restricted OpenBao operator password
+      ansible.builtin.set_fact:
+        _openbao_generated_operator_password: >-
+          {{ lookup('community.general.random_string', length=48, special=false) }}
+      when: not (_openbao_init_status.json.initialized | bool)
+      no_log: true
+
+    - name: Write the generated recovery identity directly as Ansible Vault ciphertext
+      incus_apps_vault_file:
+        path: "{{ openbao_recovery_vault_path }}"
+        password: "{{ _openbao_vault_password }}"
+        data:
+          openbao_unseal_key: "{{ _openbao_initialization.json.keys_base64[0] }}"
+          openbao_bootstrap_root_token: >-
+            {{ _openbao_initialization.json.root_token }}
+          openbao_operator_username: "{{ openbao_operator_username }}"
+          openbao_operator_password: "{{ _openbao_generated_operator_password }}"
+        mode: "0600"
+      delegate_to: localhost
+      when: not (_openbao_init_status.json.initialized | bool)
+      no_log: true
+
+    - name: Select the active OpenBao recovery identity
+      ansible.builtin.set_fact:
+        _openbao_recovery: >-
+          {{ _openbao_recovery_existing
+             if _openbao_recovery_file.stat.exists
+             else {
+               'openbao_unseal_key': _openbao_initialization.json.keys_base64[0],
+               'openbao_bootstrap_root_token': _openbao_initialization.json.root_token,
+               'openbao_operator_username': openbao_operator_username,
+               'openbao_operator_password': _openbao_generated_operator_password
+             } }}
+        _openbao_initialized_now: >-
+          {{ not (_openbao_init_status.json.initialized | bool) }}
+      no_log: true
+
+    - name: Inspect the OpenBao seal state
+      ansible.builtin.uri:
+        url: "{{ _openbao_management_url }}/v1/sys/health"
+        status_code: [200, 429, 472, 473, 501, 503]
+      delegate_to: openbao
+      register: _openbao_health
+
+    - name: Unseal OpenBao
+      ansible.builtin.uri:
+        url: "{{ _openbao_management_url }}/v1/sys/unseal"
+        method: POST
+        body_format: json
+        body:
+          key: "{{ _openbao_recovery.openbao_unseal_key }}"
+        status_code: 200
+      delegate_to: openbao
+      when: _openbao_health.json.sealed | bool
+      no_log: true
+
+    - name: Select the one-time initial root token
+      ansible.builtin.set_fact:
+        _openbao_admin_token: "{{ _openbao_initialization.json.root_token }}"
+      when: _openbao_initialized_now | bool
+      no_log: true
+
+    - name: Validate a crash-recovery bootstrap root token
+      ansible.builtin.uri:
+        url: "{{ _openbao_management_url }}/v1/auth/token/lookup-self"
+        headers:
+          X-Vault-Token: >-
+            {{ _openbao_recovery.openbao_bootstrap_root_token }}
+        status_code: [200, 403]
+      delegate_to: openbao
+      register: _openbao_recovery_root_check
+      when:
+        - not (_openbao_initialized_now | bool)
+        - _openbao_recovery.openbao_bootstrap_root_token is defined
+      no_log: true
+
+    - name: Reuse a valid crash-recovery bootstrap root token
+      ansible.builtin.set_fact:
+        _openbao_admin_token: >-
+          {{ _openbao_recovery.openbao_bootstrap_root_token }}
+      when:
+        - not (_openbao_initialized_now | bool)
+        - _openbao_recovery_root_check.status | default(0) == 200
+      no_log: true
+
+    - name: Log in as the existing restricted OpenBao operator
+      ansible.builtin.uri:
+        url: >-
+          {{ _openbao_management_url }}/v1/auth/userpass/login/{{ openbao_operator_username }}
+        method: POST
+        body_format: json
+        body:
+          password: "{{ _openbao_recovery.openbao_operator_password }}"
+        status_code: 200
+      delegate_to: openbao
+      register: _openbao_operator_login
+      when:
+        - not (_openbao_initialized_now | bool)
+        - _openbao_admin_token is not defined
+      no_log: true
+
+    - name: Select the existing operator token
+      ansible.builtin.set_fact:
+        _openbao_admin_token: "{{ _openbao_operator_login.json.auth.client_token }}"
+      when:
+        - not (_openbao_initialized_now | bool)
+        - _openbao_admin_token is not defined
+      no_log: true
+
+  tasks:
+    - name: Inspect enabled OpenBao secret engines
+      ansible.builtin.uri:
+        url: "{{ _openbao_management_url }}/v1/sys/mounts"
+        headers:
+          X-Vault-Token: "{{ _openbao_admin_token }}"
+        status_code: 200
+      delegate_to: openbao
+      register: _openbao_mounts
+      no_log: true
+
+    - name: Enable the versioned application KV engine
+      ansible.builtin.uri:
+        url: "{{ _openbao_management_url }}/v1/sys/mounts/{{ openbao_kv_mount }}"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ _openbao_admin_token }}"
+        body_format: json
+        body:
+          type: kv
+          description: Incus application secrets
+          options:
+            version: "2"
+        status_code: 204
+      delegate_to: openbao
+      when: (openbao_kv_mount ~ '/') not in _openbao_mounts.json
+      no_log: true
+
+    - name: Configure KV version retention
+      ansible.builtin.uri:
+        url: "{{ _openbao_management_url }}/v1/{{ openbao_kv_mount }}/config"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ _openbao_admin_token }}"
+        body_format: json
+        body:
+          max_versions: 20
+          cas_required: false
+        status_code: 204
+      delegate_to: openbao
+      no_log: true
+
+    - name: Inspect enabled OpenBao authentication methods
+      ansible.builtin.uri:
+        url: "{{ _openbao_management_url }}/v1/sys/auth"
+        headers:
+          X-Vault-Token: "{{ _openbao_admin_token }}"
+        status_code: 200
+      delegate_to: openbao
+      register: _openbao_auth_methods
+      no_log: true
+
+    - name: Enable OpenBao authentication methods
+      ansible.builtin.uri:
+        url: "{{ _openbao_management_url }}/v1/sys/auth/{{ item.path }}"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ _openbao_admin_token }}"
+        body_format: json
+        body:
+          type: "{{ item.type }}"
+          description: "{{ item.description }}"
+        status_code: 204
+      loop:
+        - path: userpass
+          type: userpass
+          description: Restricted local operator authentication
+        - path: approle
+          type: approle
+          description: Semaphore task authentication
+      loop_control:
+        label: "{{ item.path }}"
+      delegate_to: openbao
+      when: (item.path ~ '/') not in _openbao_auth_methods.json
+      no_log: true
+
+    - name: Reconcile OpenBao ACL policies
+      ansible.builtin.uri:
+        url: "{{ _openbao_management_url }}/v1/sys/policies/acl/{{ item.name }}"
+        method: PUT
+        headers:
+          X-Vault-Token: "{{ _openbao_admin_token }}"
+        body_format: json
+        body:
+          policy: "{{ item.policy }}"
+        status_code: 204
+      loop:
+        - name: incus-apps-semaphore
+          policy: "{{ _openbao_semaphore_policy }}"
+        - name: incus-apps-operator
+          policy: "{{ _openbao_operator_policy }}"
+      loop_control:
+        label: "{{ item.name }}"
+      delegate_to: openbao
+      no_log: true
+
+    - name: Reconcile the restricted OpenBao operator
+      ansible.builtin.uri:
+        url: >-
+          {{ _openbao_management_url }}/v1/auth/userpass/users/{{ openbao_operator_username }}
+        method: POST
+        headers:
+          X-Vault-Token: "{{ _openbao_admin_token }}"
+        body_format: json
+        body:
+          password: "{{ _openbao_recovery.openbao_operator_password }}"
+          policies:
+            - incus-apps-operator
+          token_ttl: 1h
+          token_max_ttl: 4h
+        status_code: 204
+      delegate_to: openbao
+      no_log: true
+
+    - name: Reconcile the Semaphore AppRole
+      ansible.builtin.uri:
+        url: >-
+          {{ _openbao_management_url }}/v1/auth/approle/role/{{ openbao_semaphore_role_name }}
+        method: POST
+        headers:
+          X-Vault-Token: "{{ _openbao_admin_token }}"
+        body_format: json
+        body:
+          bind_secret_id: true
+          token_policies:
+            - incus-apps-semaphore
+          token_ttl: 15m
+          token_max_ttl: 1h
+          secret_id_ttl: 0
+          secret_id_num_uses: 0
+        status_code: 204
+      delegate_to: openbao
+      no_log: true
+
+    - name: Set the deterministic Semaphore AppRole ID
+      ansible.builtin.uri:
+        url: >-
+          {{ _openbao_management_url }}/v1/auth/approle/role/{{ openbao_semaphore_role_name }}/role-id
+        method: POST
+        headers:
+          X-Vault-Token: "{{ _openbao_admin_token }}"
+        body_format: json
+        body:
+          role_id: "{{ openbao_semaphore_role_id }}"
+        status_code: 204
+      delegate_to: openbao
+      no_log: true
+
+    - name: Inspect platform OpenBao secret groups
+      ansible.builtin.uri:
+        url: >-
+          {{ _openbao_management_url }}/v1/{{ openbao_kv_mount }}/data/{{ item }}
+        headers:
+          X-Vault-Token: "{{ _openbao_admin_token }}"
+        status_code: [200, 404]
+      loop:
+        - incus-apps/gitea
+        - incus-apps/semaphore
+        - incus-apps/ingress
+      loop_control:
+        label: "{{ item }}"
+      delegate_to: openbao
+      register: _openbao_platform_secret_groups
+      no_log: true
+
+    - name: Generate the Semaphore Incus private key in memory
+      community.crypto.openssl_privatekey_pipe:
+        type: RSA
+        size: 3072
+      register: _semaphore_incus_private_key
+      when: >-
+        (_openbao_platform_secret_groups.results |
+         selectattr('item', 'equalto', 'incus-apps/semaphore') | first).status == 404
+      no_log: true
+
+    - name: Generate the Semaphore Incus certificate request in memory
+      community.crypto.openssl_csr_pipe:
+        privatekey_content: "{{ _semaphore_incus_private_key.privatekey }}"
+        common_name: semaphore-gitops
+        organization_name: incus-apps
+        key_usage:
+          - digitalSignature
+        extended_key_usage:
+          - clientAuth
+      register: _semaphore_incus_csr
+      when: _semaphore_incus_private_key is not skipped
+      no_log: true
+
+    - name: Generate the Semaphore Incus client certificate in memory
+      community.crypto.x509_certificate_pipe:
+        provider: selfsigned
+        privatekey_content: "{{ _semaphore_incus_private_key.privatekey }}"
+        csr_content: "{{ _semaphore_incus_csr.csr }}"
+        selfsigned_not_after: +3650d
+      register: _semaphore_incus_certificate
+      when: _semaphore_incus_csr is not skipped
+      no_log: true
+
+    - name: Build missing platform secret payloads
+      ansible.builtin.set_fact:
+        _openbao_missing_platform_secrets: >-
+          {{ _openbao_missing_platform_secrets | default([]) + [item] }}
+      loop: >-
+        {{ [
+          {
+            'path': 'incus-apps/gitea',
+            'missing': ((_openbao_platform_secret_groups.results |
+                        selectattr('item', 'equalto', 'incus-apps/gitea') |
+                        first).status == 404),
+            'data': {
+              'lab_gitea_admin_username': gitea_admin_username,
+              'lab_gitea_admin_password': lookup('community.general.random_string', length=40, special=false),
+              'lab_gitea_admin_email': gitea_admin_email,
+              'lab_gitea_webhook_secret': lookup('community.general.random_string', length=64, special=false)
+            }
+          }
+          {
+            'path': 'incus-apps/semaphore',
+            'missing': ((_openbao_platform_secret_groups.results |
+                        selectattr('item', 'equalto', 'incus-apps/semaphore') |
+                        first).status == 404),
+            'data': {
+              'lab_semaphore_admin_username': semaphore_admin_username,
+              'lab_semaphore_admin_password': lookup('community.general.random_string', length=40, special=false),
+              'lab_semaphore_admin_email': semaphore_admin_email,
+              'lab_semaphore_cookie_hash': lookup('community.general.random_string', length=64, special=false),
+              'lab_semaphore_cookie_encryption': (lookup('community.general.random_string', length=32, special=false) | b64encode),
+              'lab_semaphore_access_key_encryption': (lookup('community.general.random_string', length=32, special=false) | b64encode),
+              'lab_semaphore_incus_client_cert': _semaphore_incus_certificate.certificate | default(''),
+              'lab_semaphore_incus_client_key': _semaphore_incus_private_key.privatekey | default(''),
+              'lab_semaphore_incus_server_cert': lookup('ansible.builtin.file', incus_server_cert_path)
+            }
+          },
+        ] }}
+      loop_control:
+        label: "{{ item.path }}"
+      when: item.missing | bool
+      no_log: true
+
+    - name: Select the existing ingress secret group
+      ansible.builtin.set_fact:
+        _openbao_ingress_secret_result: >-
+          {{ _openbao_platform_secret_groups.results |
+             selectattr('item', 'equalto', 'incus-apps/ingress') | first }}
+      no_log: true
+
+    - name: Select existing ingress secret values and version
+      ansible.builtin.set_fact:
+        _openbao_ingress_existing_data: >-
+          {{ _openbao_ingress_secret_result.get('json', {}).get(
+             'data', {}).get('data', {}) }}
+        _openbao_ingress_existing_version: >-
+          {{ _openbao_ingress_secret_result.get('json', {}).get(
+             'data', {}).get('metadata', {}).get('version', 0) }}
+      no_log: true
+
+    - name: Require a Cloudflare token when Cloudflare TLS is enabled
+      ansible.builtin.assert:
+        that:
+          - >-
+            _openbao_cloudflare_token_input | length > 0 or
+            _openbao_ingress_existing_data.lab_cloudflare_api_token |
+            default('') | length > 0
+        fail_msg: >-
+          INCUS_APPS_CLOUDFLARE_API_TOKEN is required for a domain using
+          tls_mode: cloudflare unless OpenBao already contains the token.
+          Export it only for a bootstrap run that creates or rotates the value.
+      when: _openbao_cloudflare_enabled | bool
+      no_log: true
+
+    - name: Create missing platform secret groups without overwriting values
+      ansible.builtin.uri:
+        url: >-
+          {{ _openbao_management_url }}/v1/{{ openbao_kv_mount }}/data/{{ item.path }}
+        method: POST
+        headers:
+          X-Vault-Token: "{{ _openbao_admin_token }}"
+        body_format: json
+        body:
+          options:
+            cas: 0
+          data: "{{ item.data }}"
+        status_code: 200
+      loop: "{{ _openbao_missing_platform_secrets | default([]) }}"
+      loop_control:
+        label: "{{ item.path }}"
+      delegate_to: openbao
+      no_log: true
+
+    - name: Create or rotate the Cloudflare token in OpenBao
+      ansible.builtin.uri:
+        url: >-
+          {{ _openbao_management_url }}/v1/{{ openbao_kv_mount
+          }}/data/incus-apps/ingress
+        method: POST
+        headers:
+          X-Vault-Token: "{{ _openbao_admin_token }}"
+        body_format: json
+        body:
+          options:
+            cas: "{{ _openbao_ingress_existing_version | int }}"
+          data: >-
+            {{ _openbao_ingress_existing_data |
+               combine({'lab_cloudflare_api_token':
+                        _openbao_cloudflare_token_input}) }}
+        status_code: 200
+      delegate_to: openbao
+      when:
+        - _openbao_cloudflare_enabled | bool
+        - _openbao_cloudflare_token_input | length > 0
+        - >-
+          _openbao_ingress_existing_data.lab_cloudflare_api_token |
+          default('') != _openbao_cloudflare_token_input
+      no_log: true
+
+    - name: Generate a fresh Semaphore AppRole SecretID for bootstrap
+      ansible.builtin.uri:
+        url: >-
+          {{ _openbao_management_url }}/v1/auth/approle/role/{{ openbao_semaphore_role_name }}/secret-id
+        method: POST
+        headers:
+          X-Vault-Token: "{{ _openbao_admin_token }}"
+        body_format: json
+        body:
+          metadata: >-
+            {{ {'owner': 'semaphore', 'purpose': 'incus-apps-bootstrap'} | to_json }}
+        status_code: 200
+      delegate_to: openbao
+      register: _openbao_semaphore_secret
+      no_log: true
+
+    - name: Retain the new Semaphore AppRole SecretID only in memory
+      ansible.builtin.set_fact:
+        openbao_semaphore_secret_id: >-
+          {{ _openbao_semaphore_secret.json.data.secret_id }}
+        openbao_semaphore_secret_id_accessor: >-
+          {{ _openbao_semaphore_secret.json.data.secret_id_accessor }}
+      no_log: true
+
+    - name: Verify the restricted operator login before revoking bootstrap access
+      ansible.builtin.uri:
+        url: >-
+          {{ _openbao_management_url }}/v1/auth/userpass/login/{{ openbao_operator_username }}
+        method: POST
+        body_format: json
+        body:
+          password: "{{ _openbao_recovery.openbao_operator_password }}"
+        status_code: 200
+      delegate_to: openbao
+      register: _openbao_operator_verification
+      no_log: true
+
+    - name: Revoke the initialization or operator administration token
+      ansible.builtin.uri:
+        url: "{{ _openbao_management_url }}/v1/auth/token/revoke-self"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ _openbao_admin_token }}"
+        status_code: 204
+      delegate_to: openbao
+      no_log: true
+
+    - name: Remove the revoked bootstrap root token from recovery ciphertext
+      incus_apps_vault_file:
+        path: "{{ openbao_recovery_vault_path }}"
+        password: "{{ _openbao_vault_password }}"
+        data:
+          openbao_unseal_key: "{{ _openbao_recovery.openbao_unseal_key }}"
+          openbao_operator_username: "{{ openbao_operator_username }}"
+          openbao_operator_password: >-
+            {{ _openbao_recovery.openbao_operator_password }}
+        mode: "0600"
+      delegate_to: localhost
+      no_log: true
+
+    - name: Revoke the operator verification token
+      ansible.builtin.uri:
+        url: "{{ _openbao_management_url }}/v1/auth/token/revoke-self"
+        method: POST
+        headers:
+          X-Vault-Token: >-
+            {{ _openbao_operator_verification.json.auth.client_token }}
+        status_code: 204
+      delegate_to: openbao
+      no_log: true

@@ -1,0 +1,239 @@
+---
+- name: Validate Caddy ingress inputs
+  ansible.builtin.assert:
+    that:
+      - caddy_ingress_routes is sequence
+      - caddy_ingress_domains is sequence
+      - caddy_ingress_domains is not string
+      - caddy_ingress_domains | length > 0
+    fail_msg: >-
+      Caddy ingress routes and domains must be non-empty sequences.
+
+- name: Validate Caddy ingress domains
+  ansible.builtin.assert:
+    that:
+      - item is mapping
+      - item.name | default('') is match('^[a-z0-9][a-z0-9.-]+$')
+      - item.tls_mode | default('') in ['internal', 'cloudflare']
+    fail_msg: >-
+      Each Caddy ingress domain requires a valid name and a TLS mode of internal
+      or cloudflare.
+  loop: "{{ caddy_ingress_domains }}"
+  loop_control:
+    label: "{{ item.name | default('invalid domain') }}"
+
+- name: Validate Caddy ingress domain uniqueness
+  ansible.builtin.assert:
+    that:
+      - >-
+        caddy_ingress_domains | map(attribute='name') | unique | list | length ==
+        caddy_ingress_domains | length
+    fail_msg: Caddy ingress domain names must be unique.
+
+- name: Resolve Caddy ingress TLS requirements
+  ansible.builtin.set_fact:
+    _caddy_cloudflare_enabled: >-
+      {{ caddy_ingress_domains |
+         selectattr('tls_mode', 'equalto', 'cloudflare') | list | length > 0 }}
+    _caddy_ingress_domain_pattern: >-
+      {{ caddy_ingress_domains | map(attribute='name') |
+         map('regex_escape') | join('|') }}
+
+- name: Require a token for Cloudflare-managed domains
+  ansible.builtin.assert:
+    that:
+      - not _caddy_cloudflare_enabled or caddy_cloudflare_api_token | length > 0
+    fail_msg: >-
+      At least one Caddy ingress domain uses Cloudflare DNS, but no scoped API
+      token was supplied.
+
+- name: Validate Caddy route domains
+  ansible.builtin.assert:
+    that:
+      - item.host | default('') is match('^.+\\.(' ~ _caddy_ingress_domain_pattern ~ ')$')
+    fail_msg: >-
+      Caddy route {{ item.host | default('without a host') }} is not below a
+      configured ingress domain.
+  loop: "{{ caddy_ingress_routes }}"
+  loop_control:
+    label: "{{ item.host | default('invalid route') }}"
+
+- name: Install Caddy repository prerequisites
+  ansible.builtin.apt:
+    name:
+      - apt-transport-https
+      - ca-certificates
+      - curl
+      - debian-archive-keyring
+      - debian-keyring
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Install the Caddy stable repository signing key
+  ansible.builtin.get_url:
+    url: https://dl.cloudsmith.io/public/caddy/stable/gpg.key
+    dest: /usr/share/keyrings/caddy-stable-archive-keyring.asc
+    owner: root
+    group: root
+    mode: "0644"
+  register: _caddy_repository_key
+
+- name: Install the Caddy stable package repository
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/caddy-stable.list
+    content: >-
+      deb [signed-by=/usr/share/keyrings/caddy-stable-archive-keyring.asc]
+      https://dl.cloudsmith.io/public/caddy/stable/deb/debian
+      any-version main
+    owner: root
+    group: root
+    mode: "0644"
+  register: _caddy_repository
+
+- name: Install the current stable Caddy package
+  ansible.builtin.apt:
+    name: "caddy={{ caddy_version }}"
+    state: present
+    update_cache: >-
+      {{ _caddy_repository_key.changed or _caddy_repository.changed }}
+  register: _caddy_package_install
+
+- name: Inspect installed Caddy modules
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/caddy
+      - list-modules
+      - --packages
+  register: _caddy_modules
+  changed_when: false
+
+- name: Install the Cloudflare DNS module when requested
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/caddy
+      - add-package
+      - "{{ caddy_cloudflare_module }}"
+  register: _caddy_module_install
+  changed_when: true
+  when:
+    - _caddy_cloudflare_enabled
+    - caddy_cloudflare_module not in _caddy_modules.stdout
+
+- name: Verify the Cloudflare DNS module is available
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/caddy
+      - list-modules
+      - --packages
+  register: _caddy_custom_modules
+  changed_when: false
+  failed_when: caddy_cloudflare_module not in _caddy_custom_modules.stdout
+  when: _caddy_cloudflare_enabled
+
+- name: Ensure Caddy directories have safe ownership
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - path: /etc/caddy
+      owner: root
+      group: caddy
+      mode: "0750"
+    - path: "{{ caddy_data_path }}"
+      owner: caddy
+      group: caddy
+      mode: "0750"
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Install Caddy environment
+  ansible.builtin.template:
+    src: environment.j2
+    dest: "{{ caddy_environment_path }}"
+    owner: root
+    group: caddy
+    mode: "0640"
+  register: _caddy_environment
+  no_log: true
+
+- name: Ensure Caddy systemd override directory exists
+  ansible.builtin.file:
+    path: /etc/systemd/system/caddy.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install Caddy systemd environment override
+  ansible.builtin.template:
+    src: override.conf.j2
+    dest: /etc/systemd/system/caddy.service.d/override.conf
+    owner: root
+    group: root
+    mode: "0644"
+  register: _caddy_systemd_override
+
+- name: Render Caddy configuration from live Incus routes
+  ansible.builtin.template:
+    src: Caddyfile.j2
+    dest: "{{ caddy_config_path }}"
+    owner: root
+    group: caddy
+    mode: "0640"
+  register: _caddy_configuration
+
+- name: Validate rendered Caddy configuration
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/caddy
+      - validate
+      - --config
+      - "{{ caddy_config_path }}"
+  environment:
+    CF_API_TOKEN: "{{ caddy_cloudflare_api_token }}"
+  changed_when: false
+  no_log: true
+
+- name: Restart Caddy after binary or service environment changes
+  ansible.builtin.systemd_service:
+    name: caddy
+    enabled: true
+    state: restarted
+    daemon_reload: true
+  when: >-
+    _caddy_package_install.changed or
+    _caddy_module_install.changed | default(false) or
+    _caddy_environment.changed or
+    _caddy_systemd_override.changed
+
+- name: Ensure Caddy is enabled and running
+  ansible.builtin.systemd_service:
+    name: caddy
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Reload changed Caddy configuration without downtime
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/caddy
+      - reload
+      - --config
+      - "{{ caddy_config_path }}"
+  environment:
+    CF_API_TOKEN: "{{ caddy_cloudflare_api_token }}"
+  changed_when: _caddy_configuration.changed
+  no_log: true
+
+- name: Wait for the local Caddy administration API
+  ansible.builtin.uri:
+    url: http://127.0.0.1:2019/config/
+    status_code: 200
+  register: _caddy_admin_health
+  retries: 20
+  delay: 2
+  until: _caddy_admin_health.status == 200

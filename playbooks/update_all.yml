@@ -1,0 +1,37 @@
+---
+- name: Update every Incus application
+  hosts: incus_api
+  gather_facts: false
+
+  pre_tasks:
+    - name: Load application secrets from OpenBao
+      ansible.builtin.include_tasks: tasks/load_openbao_secrets.yml
+
+    - name: Load and validate the application catalog
+      ansible.builtin.include_tasks: tasks/load_catalog.yml
+
+  tasks:
+    - name: Update the shared ingress foundation first
+      ansible.builtin.include_tasks: tasks/apply_file.yml
+      vars:
+        _application_path: "{{ playbook_dir }}/../apps/ingress.yaml"
+        _application_update: true
+
+    - name: Refresh or package-update application services
+      ansible.builtin.include_tasks: tasks/apply_file.yml
+      vars:
+        _application_update: true
+      loop: >-
+        {{ query('ansible.builtin.fileglob', playbook_dir ~ '/../apps/*.yaml') |
+           reject('equalto', playbook_dir ~ '/../apps/ingress.yaml') | sort }}
+      loop_control:
+        loop_var: _application_path
+        label: "{{ _application_path | basename }}"
+      when:
+        - _application_path | basename != 'ingress.yaml'
+        - >-
+          (_application_path | basename | splitext | first) not in
+          incus_platform_applications
+
+- name: Reconcile Caddy after all application updates
+  ansible.builtin.import_playbook: reconcile_ingress.yml

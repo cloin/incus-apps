@@ -1,0 +1,74 @@
+---
+- name: Resolve generated ingress configuration from live Incus state
+  hosts: incus_api
+  gather_facts: false
+
+  tasks:
+    - name: Load application secrets from OpenBao
+      ansible.builtin.include_tasks: tasks/load_openbao_secrets.yml
+
+    - name: Load the application catalog
+      ansible.builtin.include_tasks: tasks/load_catalog.yml
+
+    - name: Select applications that remain present
+      ansible.builtin.set_fact:
+        _incus_ingress_catalog: >-
+          {{ _incus_application_catalog |
+             rejectattr('application.name', 'in',
+             incus_ingress_excluded_applications | default([])) | list }}
+
+    - name: Query live Incus instances after application reconciliation
+      ansible.builtin.command:
+        argv:
+          - incus
+          - list
+          - "{{ incus_remote }}:"
+          - --all-projects
+          - --format
+          - json
+      register: _incus_ingress_instances
+      changed_when: false
+      retries: 20
+      delay: 2
+      until: >-
+        (_incus_ingress_catalog |
+         incus_app_ingress_bindings(
+         _incus_ingress_instances.stdout | from_json, false) | length) ==
+        (_incus_ingress_catalog | incus_app_ingress_count)
+
+    - name: Resolve desired routes to live ingress addresses
+      ansible.builtin.set_fact:
+        _incus_ingress_routes: >-
+          {{ _incus_ingress_catalog |
+             incus_app_ingress_bindings(
+             _incus_ingress_instances.stdout | from_json) }}
+
+    - name: Register live Caddy configuration for the following plays
+      ansible.builtin.add_host:
+        name: caddy
+        caddy_ingress_routes: "{{ _incus_ingress_routes }}"
+        caddy_ingress_domains: "{{ incus_ingress_domains }}"
+        caddy_ingress_email: "{{ incus_ingress_email | default('') }}"
+        caddy_cloudflare_api_token: >-
+          {{ lab_cloudflare_api_token | default('') }}
+      changed_when: false
+      no_log: true
+
+- name: Bootstrap Python inside the Caddy system container
+  hosts: caddy
+  gather_facts: false
+
+  tasks:
+    - name: Install Python for Ansible modules
+      ansible.builtin.raw: >-
+        test -x /usr/bin/python3 ||
+        (export DEBIAN_FRONTEND=noninteractive &&
+        apt-get update && apt-get install -y python3 python3-apt)
+      changed_when: false
+
+- name: Render and apply Caddy from resolved Incus routes
+  hosts: caddy
+  gather_facts: true
+
+  roles:
+    - role: caddy

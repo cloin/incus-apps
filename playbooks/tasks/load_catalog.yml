@@ -1,0 +1,19 @@
+---
+- name: Initialize the application catalog
+  ansible.builtin.set_fact:
+    _incus_application_catalog: []
+
+- name: Load application catalog files
+  ansible.builtin.include_tasks: load_catalog_file.yml
+  loop: "{{ query('ansible.builtin.fileglob', playbook_dir ~ '/../apps/*.yaml') | sort }}"
+  loop_control:
+    loop_var: _catalog_application_path
+    label: "{{ _catalog_application_path | basename }}"
+
+- name: Validate the complete application catalog
+  ansible.builtin.assert:
+    that:
+      - _incus_application_catalog | incus_app_validate_catalog
+    fail_msg: >-
+      The application catalog contains an invalid route, exposure, network
+      attachment, duplicate host, duplicate explicit address, or port collision.

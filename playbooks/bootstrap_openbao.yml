@@ -1,0 +1,38 @@
+---
+- name: Create the OpenBao Incus application
+  hosts: incus_api
+  gather_facts: false
+
+  pre_tasks:
+    - name: Load the ingress application definition
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../apps/ingress.yaml"
+        name: _ingress_application_file
+
+    - name: Load the OpenBao application definition
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../apps/openbao.yaml"
+        name: _openbao_application_file
+
+    - name: Validate the bootstrap application subset
+      ansible.builtin.assert:
+        that:
+          - >-
+            ([_ingress_application_file, _openbao_application_file] |
+             incus_app_validate_catalog)
+
+  tasks:
+    - name: Reconcile the shared ingress foundation
+      ansible.builtin.include_role:
+        name: application
+      vars:
+        incus_application_definition: "{{ _ingress_application_file }}"
+
+    - name: Reconcile the OpenBao application primitives
+      ansible.builtin.include_role:
+        name: application
+      vars:
+        incus_application_definition: "{{ _openbao_application_file }}"
+
+- name: Install and start OpenBao
+  ansible.builtin.import_playbook: provision_openbao.yml

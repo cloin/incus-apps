@@ -1,0 +1,134 @@
+---
+- name: Install OpenBao runtime packages
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+      - logrotate
+      - tar
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Ensure OpenBao service group exists
+  ansible.builtin.group:
+    name: openbao
+    system: true
+
+- name: Ensure OpenBao service user exists
+  ansible.builtin.user:
+    name: openbao
+    group: openbao
+    home: "{{ openbao_data_path }}"
+    shell: /usr/sbin/nologin
+    system: true
+    create_home: false
+
+- name: Ensure OpenBao directories exist
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner | default('openbao') }}"
+    group: "{{ item.group | default('openbao') }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - path: /etc/openbao
+      owner: root
+      group: openbao
+      mode: "0750"
+    - path: "{{ openbao_data_path }}"
+      mode: "0750"
+    - path: "{{ openbao_data_path }}/raft"
+      mode: "0750"
+    - path: /var/log/openbao
+      mode: "0750"
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Download the pinned OpenBao release
+  ansible.builtin.get_url:
+    url: "{{ openbao_archive_url }}"
+    dest: "/var/cache/openbao_{{ openbao_version }}_linux_amd64.tar.gz"
+    checksum: "{{ openbao_archive_checksum }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install the pinned OpenBao binary
+  ansible.builtin.unarchive:
+    src: "/var/cache/openbao_{{ openbao_version }}_linux_amd64.tar.gz"
+    dest: /usr/local/bin
+    include:
+      - bao
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install OpenBao configuration
+  ansible.builtin.template:
+    src: openbao.hcl.j2
+    dest: "{{ openbao_config_path }}"
+    owner: root
+    group: openbao
+    mode: "0640"
+  notify: Restart OpenBao
+
+- name: Install OpenBao systemd unit
+  ansible.builtin.template:
+    src: openbao.service.j2
+    dest: /etc/systemd/system/openbao.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart OpenBao
+
+- name: Install OpenBao audit log rotation
+  ansible.builtin.copy:
+    dest: /etc/logrotate.d/openbao
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      {{ openbao_audit_path }} {
+          daily
+          rotate 30
+          compress
+          delaycompress
+          missingok
+          notifempty
+          create 0600 openbao openbao
+          sharedscripts
+          postrotate
+              /bin/systemctl kill --signal=HUP openbao.service >/dev/null 2>&1 || true
+          endscript
+      }
+
+- name: Enable and start OpenBao
+  ansible.builtin.systemd_service:
+    name: openbao
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Apply pending OpenBao restart
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for the OpenBao API in any lifecycle state
+  ansible.builtin.uri:
+    url: >-
+      http://127.0.0.1:{{ openbao_api_port }}/v1/sys/health?standbyok=true&sealedcode=200&uninitcode=200
+    status_code: 200
+  register: _openbao_health
+  retries: 30
+  delay: 2
+  until: _openbao_health.status == 200
+
+- name: Verify the installed OpenBao version
+  ansible.builtin.command:
+    argv:
+      - /usr/local/bin/bao
+      - version
+  register: _openbao_version_output
+  changed_when: false
+  failed_when: "'OpenBao v' ~ openbao_version not in _openbao_version_output.stdout"

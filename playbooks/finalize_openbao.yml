@@ -1,0 +1,68 @@
+---
+- name: Remove superseded Semaphore AppRole SecretIDs
+  hosts: incus_api
+  gather_facts: false
+
+  vars:
+    _openbao_management_url: http://127.0.0.1:8200
+
+  tasks:
+    - name: Load the encrypted OpenBao recovery identity
+      ansible.builtin.include_vars:
+        file: "{{ openbao_recovery_vault_path }}"
+        name: _openbao_recovery
+      no_log: true
+
+    - name: Log in as the restricted OpenBao operator
+      ansible.builtin.uri:
+        url: >-
+          {{ _openbao_management_url }}/v1/auth/userpass/login/{{ openbao_operator_username }}
+        method: POST
+        body_format: json
+        body:
+          password: "{{ _openbao_recovery.openbao_operator_password }}"
+        status_code: 200
+      delegate_to: openbao
+      register: _openbao_operator_login
+      no_log: true
+
+    - name: List Semaphore AppRole SecretID accessors
+      ansible.builtin.uri:
+        url: >-
+          {{ _openbao_management_url }}/v1/auth/approle/role/{{ openbao_semaphore_role_name }}/secret-id-accessor
+        method: LIST
+        headers:
+          X-Vault-Token: "{{ _openbao_operator_login.json.auth.client_token }}"
+        status_code: 200
+      delegate_to: openbao
+      register: _openbao_semaphore_accessors
+      no_log: true
+
+    - name: Destroy superseded Semaphore AppRole SecretIDs
+      ansible.builtin.uri:
+        url: >-
+          {{ _openbao_management_url }}/v1/auth/approle/role/{{ openbao_semaphore_role_name }}/secret-id-accessor/destroy
+        method: POST
+        headers:
+          X-Vault-Token: "{{ _openbao_operator_login.json.auth.client_token }}"
+        body_format: json
+        body:
+          secret_id_accessor: "{{ item }}"
+        status_code: 204
+      loop: >-
+        {{ _openbao_semaphore_accessors.json.data.keys |
+           reject('equalto', openbao_semaphore_secret_id_accessor) | list }}
+      loop_control:
+        label: superseded-accessor
+      delegate_to: openbao
+      no_log: true
+
+    - name: Revoke the finalization token
+      ansible.builtin.uri:
+        url: "{{ _openbao_management_url }}/v1/auth/token/revoke-self"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ _openbao_operator_login.json.auth.client_token }}"
+        status_code: 204
+      delegate_to: openbao
+      no_log: true

@@ -1,0 +1,12 @@
+---
+openbao_version: 2.6.1
+openbao_archive_checksum: sha256:ca8d836eb3a5c80407e45e762300b64e7138c419e78826955f2e4ba4ce6d8a6b
+openbao_archive_url: >-
+  https://github.com/openbao/openbao/releases/download/v{{ openbao_version }}/openbao_{{ openbao_version }}_linux_amd64.tar.gz
+
+openbao_public_url: https://openbao.lab.example.net
+openbao_config_path: /etc/openbao/openbao.hcl
+openbao_data_path: /var/lib/openbao
+openbao_audit_path: /var/log/openbao/audit.log
+openbao_api_port: 8200
+openbao_cluster_port: 8201

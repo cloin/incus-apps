@@ -1,0 +1,65 @@
+---
+- name: Prepare declared OpenBao secrets for one application
+  hosts: incus_api
+  gather_facts: false
+
+  vars:
+    _openbao_management_url: http://127.0.0.1:8200
+
+  pre_tasks:
+    - name: Validate the requested application name
+      ansible.builtin.assert:
+        that:
+          - app is defined
+          - app is match('^[a-z0-9][a-z0-9-]*$')
+        fail_msg: Supply an application with -e app=<name>.
+
+    - name: Read the requested application's secret metadata
+      incus_apps_catalog_metadata:
+        directory: "{{ playbook_dir }}/../apps"
+        application: "{{ app }}"
+      delegate_to: localhost
+      register: _prepared_application_metadata
+
+    - name: Validate the requested application's secret declarations
+      ansible.builtin.set_fact:
+        _prepared_secret_specs: >-
+          {{ _prepared_application_metadata.catalog_metadata |
+             incus_app_secret_specs }}
+
+    - name: Load the encrypted OpenBao recovery identity
+      ansible.builtin.include_vars:
+        file: "{{ openbao_recovery_vault_path }}"
+        name: _openbao_recovery
+      no_log: true
+
+    - name: Log in as the restricted OpenBao operator
+      ansible.builtin.uri:
+        url: >-
+          {{ _openbao_management_url }}/v1/auth/userpass/login/{{ openbao_operator_username }}
+        method: POST
+        body_format: json
+        body:
+          password: "{{ _openbao_recovery.openbao_operator_password }}"
+        status_code: 200
+      delegate_to: openbao
+      register: _openbao_prepare_login
+      no_log: true
+
+  tasks:
+    - name: Prepare each declared OpenBao secret group
+      ansible.builtin.include_tasks: tasks/prepare_secret_group.yml
+      loop: "{{ _prepared_secret_specs }}"
+      loop_control:
+        loop_var: _prepared_secret_spec
+        label: "{{ _prepared_secret_spec.path }}"
+
+    - name: Revoke the application preparation token
+      ansible.builtin.uri:
+        url: "{{ _openbao_management_url }}/v1/auth/token/revoke-self"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ _openbao_prepare_login.json.auth.client_token }}"
+        status_code: 204
+      delegate_to: openbao
+      no_log: true

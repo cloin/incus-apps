@@ -1,0 +1,23 @@
+{
+  "sqlite": {
+    "host": "{{ semaphore_data_path }}/database.sqlite"
+  },
+  "dialect": "sqlite",
+  "port": ":3000",
+  "interface": "0.0.0.0",
+  "tmp_path": "{{ semaphore_data_path }}/tmp",
+  "web_host": "{{ semaphore_public_url }}",
+  "home_dir_mode": "user_home",
+  "git_client": "cmd_git",
+  "cookie_hash": "{{ lab_semaphore_cookie_hash }}",
+  "cookie_encryption": "{{ lab_semaphore_cookie_encryption }}",
+  "access_key_encryption": "{{ lab_semaphore_access_key_encryption }}",
+  "env_vars": {
+    "ANSIBLE_COLLECTIONS_PATH": "{{ semaphore_collections_path }}",
+    "INCUS_API_URL": "{{ incus_api_url }}",
+    "INCUS_CLIENT_CERT_PATH": "/home/semaphore/.config/incus/client.crt",
+    "INCUS_CLIENT_KEY_PATH": "/home/semaphore/.config/incus/client.key",
+    "INCUS_SERVER_CERT_PATH": "/home/semaphore/.config/incus/servercerts/lab.crt",
+    "INCUS_VALIDATE_CERTS": "false"
+  }
+}

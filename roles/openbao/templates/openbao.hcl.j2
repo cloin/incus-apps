@@ -1,0 +1,24 @@
+ui = true
+
+api_addr     = "{{ openbao_public_url }}"
+cluster_addr = "http://127.0.0.1:{{ openbao_cluster_port }}"
+
+storage "raft" {
+  path    = "{{ openbao_data_path }}/raft"
+  node_id = "openbao-1"
+}
+
+listener "tcp" {
+  address         = "0.0.0.0:{{ openbao_api_port }}"
+  cluster_address = "127.0.0.1:{{ openbao_cluster_port }}"
+  tls_disable     = true
+}
+
+audit "file" "file" {
+  description = "OpenBao API audit trail"
+
+  options {
+    file_path = "{{ openbao_audit_path }}"
+    mode      = "0600"
+  }
+}

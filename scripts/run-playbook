@@ -1,0 +1,22 @@
+#!/bin/sh
+set -eu
+
+if [ "$#" -lt 1 ]; then
+  echo "usage: scripts/run-playbook PLAYBOOK [ansible-playbook arguments...]" >&2
+  exit 2
+fi
+
+if [ -z "${INCUS_APPS_VAULT_PASSWORD:-}" ]; then
+  printf 'Ansible Vault password: ' >&2
+  stty -echo
+  trap 'stty echo' EXIT HUP INT TERM
+  IFS= read -r INCUS_APPS_VAULT_PASSWORD </dev/tty
+  stty echo
+  trap - EXIT HUP INT TERM
+  printf '\n' >&2
+  export INCUS_APPS_VAULT_PASSWORD
+fi
+
+exec ansible-playbook \
+  --vault-password-file "$(dirname "$0")/vault-password-client" \
+  "$@"

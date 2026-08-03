@@ -1,0 +1,65 @@
+---
+- name: Read the Caddy internal root when internal TLS is enabled
+  hosts: incus_api
+  gather_facts: false
+
+  tasks:
+    - name: Read the Caddy internal root certificate
+      ansible.builtin.command:
+        argv:
+          - incus
+          - file
+          - pull
+          - "{{ incus_remote }}:caddy/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt"
+          - "-"
+          - --project
+          - ingress
+      register: _caddy_internal_root
+      changed_when: false
+      when: >-
+        incus_ingress_domains |
+        selectattr('tls_mode', 'equalto', 'internal') | list | length > 0
+
+    - name: Publish the Caddy internal root to managed platform hosts
+      ansible.builtin.add_host:
+        name: "{{ item }}"
+        caddy_internal_root_certificate: "{{ _caddy_internal_root.stdout }}"
+      loop:
+        - semaphore
+      when: _caddy_internal_root is not skipped
+      changed_when: false
+      no_log: true
+
+- name: Trust the Caddy internal root inside platform controllers
+  hosts: semaphore
+  gather_facts: false
+
+  tasks:
+    - name: Resolve lab routes through the Incus host ingress listeners
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        regexp: '^{{ incus_host_address | regex_escape }}\s+.*# incus-apps$'
+        line: >-
+          {{ incus_host_address }} {{ openbao_hostname }} {{ gitea_hostname }}
+          {{ semaphore_hostname }} # incus-apps
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Install the Caddy internal root certificate
+      ansible.builtin.copy:
+        content: "{{ caddy_internal_root_certificate }}"
+        dest: /usr/local/share/ca-certificates/incus-apps-caddy.crt
+        owner: root
+        group: root
+        mode: "0644"
+      register: _caddy_root_installed
+      when: caddy_internal_root_certificate is defined
+      notify: Refresh platform CA bundle
+
+  handlers:
+    - name: Refresh platform CA bundle
+      ansible.builtin.command:
+        argv:
+          - update-ca-certificates
+      changed_when: true

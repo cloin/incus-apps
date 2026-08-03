@@ -1,0 +1,19 @@
+default-remote: {{ incus_remote }}
+remotes:
+  {{ incus_remote }}:
+    last_working_address: {{ incus_api_url }}
+    auth_type: tls
+    project: default
+    protocol: incus
+    public: false
+    addr: {{ incus_api_url }}
+  local:
+    protocol: incus
+    public: false
+    addr: unix://
+aliases: {}
+defaults:
+  list_format: ""
+  console_type: ""
+  console_spice_command: ""
+  no_color: false

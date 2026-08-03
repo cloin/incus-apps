@@ -1,0 +1,42 @@
+---
+incus_controller_config_dir: >-
+  {{ lookup('ansible.builtin.env', 'INCUS_CONFIG_DIR') | default('', true) }}
+incus_client_cert_path: >-
+  {{ lookup('ansible.builtin.env', 'INCUS_CLIENT_CERT_PATH') |
+     default(incus_controller_client_cert_path | default(''), true) }}
+incus_client_key_path: >-
+  {{ lookup('ansible.builtin.env', 'INCUS_CLIENT_KEY_PATH') |
+     default(incus_controller_client_key_path | default(''), true) }}
+incus_server_cert_path: >-
+  {{ lookup('ansible.builtin.env', 'INCUS_SERVER_CERT_PATH') |
+     default(incus_controller_server_cert_path | default(''), true) }}
+
+incus_lab_address: "{{ incus_host_address }}"
+gitea_hostname: "git.{{ lab_domain }}"
+gitea_public_url: "https://{{ gitea_hostname }}"
+gitea_bootstrap_url: "http://{{ incus_host_address }}:{{ gitea_bootstrap_port }}"
+openbao_hostname: "openbao.{{ lab_domain }}"
+openbao_public_url: "https://{{ openbao_hostname }}"
+semaphore_hostname: "semaphore.{{ lab_domain }}"
+semaphore_public_url: "https://{{ semaphore_hostname }}"
+semaphore_bootstrap_url: >-
+  http://{{ incus_host_address }}:{{ semaphore_bootstrap_port }}
+
+openbao_kv_mount: kv
+openbao_operator_username: incus-apps-operator
+openbao_semaphore_role_name: incus-apps-semaphore
+openbao_semaphore_role_id: incus-apps-semaphore
+openbao_recovery_vault_path: >-
+  {{ inventory_dir }}/../recovery/openbao.vault.yml
+
+gitops_project_name: Incus Apps
+gitops_repository_name: Incus Applications
+gitops_inventory_name: Incus Lab
+gitops_environment_name: OpenBao Runtime
+
+incus_application_secret_prefix: incus-apps
+incus_platform_applications:
+  - ingress
+  - openbao
+  - gitea
+  - semaphore

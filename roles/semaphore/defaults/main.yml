@@ -1,0 +1,13 @@
+---
+semaphore_version: 2.18.29
+semaphore_deb_checksum: sha256:8a9c688d140480ae3df2537b0531202c428f6fedc020b58600adf6f07eb14235
+
+semaphore_incus_version: 7.3.0
+semaphore_incus_checksum: sha256:6f2edfef32b4df4bc8191f350b197862ab600307273cf5c3ce67dbf97308bbcd
+
+semaphore_ansible_core_version: 2.20.5
+semaphore_config_path: /etc/semaphore/config.json
+semaphore_data_path: /var/lib/semaphore
+semaphore_collections_path: /opt/semaphore/collections
+semaphore_venv_path: /opt/semaphore/venv
+semaphore_public_url: https://semaphore.lab.example.net

@@ -1,0 +1,12 @@
+---
+- name: Load application definition from {{ _application_path | basename }}
+  ansible.builtin.include_vars:
+    file: "{{ _application_path }}"
+    name: _application_file
+
+- name: Reconcile {{ _application_file.application.name }}
+  ansible.builtin.include_role:
+    name: application
+  vars:
+    incus_application_definition: "{{ _application_file }}"
+    incus_application_update: "{{ _application_update | default(false) }}"

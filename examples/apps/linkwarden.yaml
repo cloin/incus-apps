@@ -1,0 +1,149 @@
+---
+application:
+  name: linkwarden
+  state: present
+  description: Linkwarden bookmark archive and search stack
+
+  defaults:
+    storage_pool: "{{ incus_default_storage_pool }}"
+    network: private
+    profiles: []
+    config:
+      limits.cpu: "2"
+      limits.memory: 2GiB
+
+services:
+  web:
+    kind: application-container
+    image: ghcr:linkwarden/linkwarden:v2.16.0
+    root_size: 8GiB
+
+    environment:
+      DATABASE_URL: >-
+        postgresql://postgres:{{ lab_linkwarden_postgres_password | urlencode }}@postgres:5432/postgres
+      NEXTAUTH_URL: "https://links.{{ lab_domain }}/api/v1/auth"
+      NEXTAUTH_SECRET: "{{ lab_linkwarden_nextauth_secret }}"
+      MEILI_HOST: http://meilisearch:7700
+      MEILI_MASTER_KEY: "{{ lab_linkwarden_meili_key }}"
+
+    volumes:
+      data: /data/data
+
+    networks:
+      - name: private
+      - name: ingress
+
+    ingress:
+      - host: "links.{{ lab_domain }}"
+        port: 3000
+        scheme: http
+
+    # Ansible uses this managed listener for bootstrap/runtime health checks.
+    expose:
+      - name: legacy-http
+        protocol: tcp
+        listen_port: 3000
+        target_port: 3000
+
+    depends_on:
+      postgres:
+        condition: healthy
+      meilisearch:
+        condition: started
+
+    healthcheck:
+      http: "http://{{ incus_lab_address }}:3000"
+      status: [200, 302]
+      interval: 5
+      retries: 60
+
+  postgres:
+    kind: application-container
+    image: docker:library/postgres:16-alpine
+    root_size: 4GiB
+
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: "{{ lab_linkwarden_postgres_password }}"
+
+    volumes:
+      postgres: /var/lib/postgresql/data
+
+    healthcheck:
+      command:
+        - pg_isready
+        - --username=postgres
+        - --dbname=postgres
+      interval: 3
+      retries: 40
+
+    config:
+      limits.memory: 1GiB
+
+  meilisearch:
+    kind: application-container
+    image: docker:getmeili/meilisearch:v1.12.8
+    root_size: 4GiB
+
+    environment:
+      MEILI_ENV: production
+      MEILI_MASTER_KEY: "{{ lab_linkwarden_meili_key }}"
+
+    volumes:
+      meili: /meili_data
+
+    config:
+      limits.memory: 2GiB
+
+networks:
+  private:
+    type: bridge
+    config:
+      ipv4.address: "{{ incus_app_network_prefix }}.2.1/24"
+      ipv4.nat: true
+      ipv6.address: none
+      dns.domain: linkwarden.internal
+
+  ingress:
+    external: true
+    name: ingress
+
+volumes:
+  data:
+    size: 20GiB
+    retain: true
+    config:
+      snapshots.schedule: "@daily"
+      snapshots.expiry: 7d
+
+  postgres:
+    size: 10GiB
+    retain: true
+    config:
+      snapshots.schedule: "@daily"
+      snapshots.expiry: 7d
+
+  meili:
+    size: 10GiB
+    retain: true
+    config:
+      snapshots.schedule: "@daily"
+      snapshots.expiry: 7d
+
+secrets:
+  - path: incus-apps/apps/linkwarden
+    required:
+      - lab_linkwarden_postgres_password
+      - lab_linkwarden_nextauth_secret
+      - lab_linkwarden_meili_key
+    generate:
+      lab_linkwarden_postgres_password:
+        type: random_string
+        length: 48
+      lab_linkwarden_nextauth_secret:
+        type: random_string
+        length: 64
+      lab_linkwarden_meili_key:
+        type: random_string
+        length: 48

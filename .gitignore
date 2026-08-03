@@ -1,0 +1,13 @@
+.ansible/
+.cache/
+.venv/
+.pytest_cache/
+__pycache__/
+*.pyc
+*.retry
+private/
+.DS_Store
+
+# The personalized lab configuration and encrypted recovery vault are expected
+# to be committed only to the private Gitea repository created by bootstrap.
+# They are intentionally not ignored.

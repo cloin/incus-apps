@@ -1,0 +1,5 @@
+{% if _caddy_cloudflare_enabled %}
+CF_API_TOKEN={{ caddy_cloudflare_api_token }}
+{% else %}
+# No DNS provider token is required by the configured ingress domains.
+{% endif %}

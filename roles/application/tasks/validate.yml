@@ -1,0 +1,43 @@
+---
+- name: Validate controller credentials and application structure
+  ansible.builtin.assert:
+    that:
+      - incus_application_definition is mapping
+      - incus_application_definition.application is defined
+      - incus_application_definition.application is mapping
+      - incus_application_definition.application.name is defined
+      - incus_application_definition.application.name is match('^[a-z0-9][a-z0-9-]*$')
+      - incus_application_definition.services | default({}) is mapping
+      - incus_application_definition.networks | default({}) is mapping
+      - incus_application_definition.volumes | default({}) is mapping
+      - ([incus_application_definition] | incus_app_validate_catalog)
+      - incus_client_cert_path | default('') | length > 0
+      - incus_client_key_path | default('') | length > 0
+    fail_msg: >-
+      The application definition is invalid or Incus API credential paths are missing.
+      Set INCUS_CLIENT_CERT_PATH and INCUS_CLIENT_KEY_PATH.
+
+- name: Normalize application values
+  ansible.builtin.set_fact:
+    _incus_app: "{{ incus_application_definition.application }}"
+    _incus_app_name: "{{ incus_application_definition.application.name }}"
+    _incus_app_project: >-
+      {{ incus_application_definition.application.project |
+         default(incus_application_definition.application.name, true) }}
+    _incus_app_state: >-
+      {{ incus_application_state_override |
+         default(incus_application_definition.application.state | default('present'), true) }}
+    _incus_app_services: "{{ incus_application_definition.services | default({}) }}"
+    _incus_app_networks: "{{ incus_application_definition.networks | default({}) }}"
+    _incus_app_volumes: "{{ incus_application_definition.volumes | default({}) }}"
+    _incus_app_defaults: "{{ incus_application_definition.application.defaults | default({}) }}"
+
+- name: Validate normalized application state
+  ansible.builtin.assert:
+    that:
+      - _incus_app_state in ['present', 'absent']
+      - (_incus_app_services | incus_app_service_order | length) == (_incus_app_services | length)
+
+- name: Calculate dependency order
+  ansible.builtin.set_fact:
+    _incus_app_service_order: "{{ _incus_app_services | incus_app_service_order }}"
