@@ -29,7 +29,7 @@
     - name: List Semaphore AppRole SecretID accessors
       ansible.builtin.uri:
         url: >-
-          {{ _openbao_management_url }}/v1/auth/approle/role/{{ openbao_semaphore_role_name }}/secret-id-accessor
+          {{ _openbao_management_url }}/v1/auth/approle/role/{{ openbao_semaphore_role_name }}/secret-id
         method: LIST
         headers:
           X-Vault-Token: "{{ _openbao_operator_login.json.auth.client_token }}"
