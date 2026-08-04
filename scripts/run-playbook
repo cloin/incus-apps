@@ -17,6 +17,11 @@ if [ -z "${INCUS_APPS_VAULT_PASSWORD:-}" ]; then
   export INCUS_APPS_VAULT_PASSWORD
 fi
 
+if [ "${#INCUS_APPS_VAULT_PASSWORD}" -lt 12 ]; then
+  echo "Ansible Vault password must contain at least 12 characters." >&2
+  exit 2
+fi
+
 exec ansible-playbook \
   --vault-password-file "$(dirname "$0")/vault-password-client" \
   "$@"

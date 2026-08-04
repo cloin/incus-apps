@@ -80,7 +80,8 @@ configuration, not credentials. Important values are:
 - the Incus remote, HTTPS API URL, LAN address, and storage pool;
 - absolute paths to the controller's Incus client certificate, key, and pinned
   server certificate;
-- an unused private `/16` prefix expressed as two octets, such as `10.210`;
+- an unused private `/16` prefix expressed as a quoted two-octet string, such
+  as `"10.210"`;
 - the LAN domain and TLS mode;
 - administrator usernames/emails and the private Gitea repository name.
 
@@ -196,7 +197,7 @@ To incorporate template updates:
 ```sh
 git fetch upstream
 git merge upstream/main
-git push origin main
+scripts/push
 ```
 
 ## Logging in
@@ -259,13 +260,15 @@ Prepare those values before the first push:
 scripts/run-playbook playbooks/prepare_app.yml -e app=linkwarden
 git add apps/linkwarden.yaml
 git commit -m 'Add Linkwarden'
-git push origin main
+scripts/push
 ```
 
 `prepare_app.yml` only creates absent generated values. If a required value has
 no generator, add it through OpenBao and rerun preparation. The push webhook
 then launches Semaphore's `Apply All` template. Application secrets never enter
-Git or the webhook payload.
+Git or the webhook payload. `scripts/push` retrieves the Gitea access token from
+OpenBao for that one command and refuses to send it anywhere except the expected
+private origin; it does not write the token to Git configuration or disk.
 
 See [the application schema](docs/application-schema.md) for containers versus
 VMs, volumes, dependencies, health checks, DHCP/static IPAM, raw TCP/UDP
@@ -329,6 +332,27 @@ The bootstrap intentionally refuses two dangerous ambiguous states:
 
 Audit and restore the correct state rather than deleting either side to force a
 new initialization.
+
+## Contributing reusable changes
+
+The private GitOps branch deliberately contains personalized configuration and
+encrypted recovery material. Treat that ciphertext as sensitive and never use
+the private branch as the source of a public pull request: removing a file in a
+later commit does not remove it from the branch's earlier history.
+
+Create public contributions from a clean branch rooted at the public upstream,
+then reproduce or selectively apply only generic code, documentation, examples,
+and tests:
+
+```sh
+git fetch upstream
+git switch -c upstream-fix upstream/main
+```
+
+Before publishing, inspect the complete branch diff and history. Neither
+`group_vars/all/lab.yml`, `recovery/openbao.vault.yml`, nor activated definitions
+under `apps/` belong in the public template; reusable application definitions
+belong under `examples/apps/`.
 
 ## Development checks
 

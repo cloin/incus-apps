@@ -9,7 +9,7 @@ incus_api_url: https://CHANGE_ME:8443
 incus_host_address: CHANGE_ME
 incus_default_storage_pool: default
 incus_validate_certs: false
-incus_app_network_prefix: 10.210
+incus_app_network_prefix: "10.210"
 
 # Paths belonging to the already-trusted Incus CLI identity on the Ansible
 # controller. INCUS_CLIENT_CERT_PATH, INCUS_CLIENT_KEY_PATH, and

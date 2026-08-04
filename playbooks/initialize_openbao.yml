@@ -472,7 +472,7 @@
               'lab_gitea_admin_email': gitea_admin_email,
               'lab_gitea_webhook_secret': lookup('community.general.random_string', length=64, special=false)
             }
-          }
+          },
           {
             'path': 'incus-apps/semaphore',
             'missing': ((_openbao_platform_secret_groups.results |

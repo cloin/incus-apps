@@ -13,6 +13,25 @@ from ansible.parsing.vault import VaultLib, VaultSecret
 from ansible.plugins.action import ActionBase
 
 
+def _plain_yaml_value(value):
+    """Convert Ansible's wrapped scalar types to PyYAML-safe primitives."""
+
+    if isinstance(value, Mapping):
+        return {
+            _plain_yaml_value(key): _plain_yaml_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_plain_yaml_value(item) for item in value]
+    if isinstance(value, str):
+        return value.encode("utf-8").decode("utf-8")
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    raise AnsibleActionFail(
+        f"data contains an unsupported value of type {type(value).__name__}"
+    )
+
+
 class ActionModule(ActionBase):
     """Encrypt on the controller so plaintext is never written to disk."""
 
@@ -39,6 +58,7 @@ class ActionModule(ActionBase):
             raise AnsibleActionFail("the Ansible Vault password cannot be empty")
         if not isinstance(data, Mapping):
             raise AnsibleActionFail("data must be a mapping")
+        data = _plain_yaml_value(data)
 
         try:
             mode = int(str(arguments.get("mode", "0600")), 8)

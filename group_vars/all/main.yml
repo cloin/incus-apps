@@ -27,7 +27,7 @@ openbao_operator_username: incus-apps-operator
 openbao_semaphore_role_name: incus-apps-semaphore
 openbao_semaphore_role_id: incus-apps-semaphore
 openbao_recovery_vault_path: >-
-  {{ inventory_dir }}/../recovery/openbao.vault.yml
+  {{ playbook_dir }}/../recovery/openbao.vault.yml
 
 gitops_project_name: Incus Apps
 gitops_repository_name: Incus Applications

@@ -133,6 +133,8 @@
         body_format: json
         body:
           name: "{{ _gitea_token_name }}"
+          scopes:
+            - all
         status_code: 201
       register: _gitea_new_token
       when: _gitea_create_controller_token | bool

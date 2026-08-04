@@ -1,0 +1,72 @@
+---
+- name: Push the private GitOps checkout without persisting credentials
+  hosts: incus_api
+  gather_facts: false
+
+  vars:
+    _checkout_path: "{{ playbook_dir }}/.."
+    _gitea_public_repository_url: >-
+      {{ gitea_public_url }}/{{ lab_gitea_admin_username }}/{{ gitea_repository_name }}.git
+
+  pre_tasks:
+    - name: Load application secrets from OpenBao
+      ansible.builtin.include_tasks: tasks/load_openbao_secrets.yml
+
+  tasks:
+    - name: Read the private origin URL
+      ansible.builtin.command:
+        argv:
+          - git
+          - remote
+          - get-url
+          - "{{ gitops_origin_remote }}"
+      args:
+        chdir: "{{ _checkout_path }}"
+      register: _gitops_push_origin
+      changed_when: false
+
+    - name: Refuse to send the Gitea token to an unexpected origin
+      ansible.builtin.assert:
+        that:
+          - _gitops_push_origin.stdout == _gitea_public_repository_url
+        fail_msg: >-
+          The origin URL is not the expected private Gitea repository. Refusing
+          to attach its OpenBao-managed access token.
+
+    - name: Inspect the private checkout
+      ansible.builtin.command:
+        argv:
+          - git
+          - status
+          - --porcelain
+      args:
+        chdir: "{{ _checkout_path }}"
+      register: _gitops_push_status
+      changed_when: false
+
+    - name: Require committed application definitions
+      ansible.builtin.assert:
+        that:
+          - _gitops_push_status.stdout | length == 0
+        fail_msg: >-
+          Commit or discard the working-tree changes before pushing the GitOps
+          source of truth.
+
+    - name: Push the current commit without persisting credentials
+      ansible.builtin.command:
+        argv:
+          - git
+          - push
+          - --set-upstream
+          - "{{ gitops_origin_remote }}"
+          - "HEAD:{{ gitops_branch }}"
+      args:
+        chdir: "{{ _checkout_path }}"
+      environment:
+        GIT_CONFIG_COUNT: "1"
+        GIT_CONFIG_KEY_0: http.extraHeader
+        GIT_CONFIG_VALUE_0: >-
+          Authorization: Basic
+          {{ (lab_gitea_admin_username ~ ':' ~ lab_gitea_api_token) | b64encode }}
+      changed_when: true
+      no_log: true
