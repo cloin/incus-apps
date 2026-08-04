@@ -11,3 +11,5 @@ def test_secret_id_accessors_are_listed_from_the_secret_id_endpoint() -> None:
     assert "/secret-id\n        method: LIST" in playbook
     assert "/secret-id-accessor\n        method: LIST" not in playbook
     assert "/secret-id-accessor/destroy" in playbook
+    assert ".json.data['keys']" in playbook
+    assert ".json.data.keys" not in playbook

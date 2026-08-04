@@ -50,7 +50,7 @@
           secret_id_accessor: "{{ item }}"
         status_code: 204
       loop: >-
-        {{ _openbao_semaphore_accessors.json.data.keys |
+        {{ _openbao_semaphore_accessors.json.data['keys'] |
            reject('equalto', openbao_semaphore_secret_id_accessor) | list }}
       loop_control:
         label: superseded-accessor
