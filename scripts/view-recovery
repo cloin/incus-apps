@@ -1,6 +1,19 @@
 #!/bin/sh
 set -eu
 
+if [ "$#" -gt 1 ]; then
+  echo "usage: scripts/view-recovery [RECOVERY_FILE]" >&2
+  exit 2
+fi
+
+recovery_file="${1:-$(dirname "$0")/../recovery/openbao.vault.yml}"
+if [ ! -f "$recovery_file" ]; then
+  echo "Encrypted OpenBao recovery file not found: $recovery_file" >&2
+  echo "Run this command from the private Gitea checkout created by bootstrap," >&2
+  echo "or pass the path to a backed-up openbao.vault.yml file." >&2
+  exit 2
+fi
+
 if [ -z "${INCUS_APPS_VAULT_PASSWORD:-}" ]; then
   printf 'Ansible Vault password: ' >&2
   stty -echo
@@ -14,4 +27,4 @@ fi
 
 exec ansible-vault view \
   --vault-password-file "$(dirname "$0")/vault-password-client" \
-  "$(dirname "$0")/../recovery/openbao.vault.yml"
+  "$recovery_file"

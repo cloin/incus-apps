@@ -207,11 +207,16 @@ OpenBao first:
 1. Open `https://openbao.<lab_domain>`.
 2. Choose the username/password authentication method.
 3. Use username `incus-apps-operator`.
-4. Display the generated operator password with:
+4. From the private Gitea checkout created by bootstrap, display the generated
+   operator password with:
 
    ```sh
    scripts/view-recovery
    ```
+
+   A public template checkout intentionally has no recovery vault. If the
+   encrypted file was restored elsewhere, pass its path explicitly as
+   `scripts/view-recovery /path/to/openbao.vault.yml`.
 
 The same encrypted document contains the unseal key. The operator policy can
 manage only this project's KV data, policies, and AppRole; it is not a retained
