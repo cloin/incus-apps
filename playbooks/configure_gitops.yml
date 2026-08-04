@@ -208,7 +208,7 @@
         body:
           name: "{{ gitops_inventory_name }}"
           project_id: "{{ _gitops_project_id }}"
-          inventory: inventories/lab.yml
+          inventory: inventory.yml
           ssh_key_id: "{{ _none_key_id }}"
           repository_id: "{{ _gitops_repository_id }}"
           type: file
@@ -231,9 +231,36 @@
 
     - name: Select the Semaphore Incus inventory
       ansible.builtin.set_fact:
-        _gitops_inventory_id: >-
+        _gitops_inventory_current: >-
           {{ (_semaphore_inventories_current.json |
-              selectattr('name', 'equalto', gitops_inventory_name) | first).id }}
+              selectattr('name', 'equalto', gitops_inventory_name) | first) }}
+
+    - name: Record the Semaphore Incus inventory ID
+      ansible.builtin.set_fact:
+        _gitops_inventory_id: "{{ _gitops_inventory_current.id }}"
+
+    - name: Reconcile the Semaphore Incus inventory
+      ansible.builtin.uri:
+        url: >-
+          {{ _semaphore_url }}/api/project/{{ _gitops_project_id
+          }}/inventory/{{ _gitops_inventory_id }}
+        method: PUT
+        headers:
+          Cookie: "{{ _semaphore_login.cookies_string }}"
+        body_format: json
+        body: >-
+          {{ _gitops_inventory_current | combine({
+            'inventory': 'inventory.yml',
+            'repository_id': _gitops_repository_id,
+            'type': 'file'
+          }) }}
+        status_code: 204
+      when: >-
+        _gitops_inventory_current.inventory != 'inventory.yml' or
+        (_gitops_inventory_current.repository_id | int) != (_gitops_repository_id | int) or
+        _gitops_inventory_current.type != 'file'
+      changed_when: true
+      no_log: true
 
     - name: List Semaphore environments
       ansible.builtin.uri:
