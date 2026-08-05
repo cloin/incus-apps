@@ -1,19 +1,21 @@
 ---
-application:
-  name: ingress
-  state: present
-  description: Shared Caddy ingress for HTTP application routes
+schema: cloin.incus-compose/v1
+name: ingress
+state: present
+description: Shared Caddy ingress for HTTP application routes
+placement: "{{ incus_app_placement }}"
 
-  defaults:
-    storage_pool: "{{ incus_default_storage_pool }}"
-    network: ingress
-    profiles: []
+defaults:
+  storage_pool: "{{ incus_default_storage_pool }}"
+  network: ingress
+  profiles: []
 
 services:
   caddy:
-    kind: system-container
+    type: container
     image: images:debian/13
-    root_size: 8GiB
+    root:
+      size: 8GiB
     recreate_on_source_change: false
 
     update:
@@ -28,7 +30,7 @@ services:
     volumes:
       data: /var/lib/caddy
 
-    expose:
+    ports:
       - name: http
         protocol: tcp
         listen_port: 80
@@ -63,7 +65,8 @@ volumes:
       snapshots.schedule: "@daily"
       snapshots.expiry: 14d
 
-secrets:
-  - path: incus-apps/ingress
-    required: []
-    optional: true
+x-incus-apps:
+  secrets:
+    - path: incus-apps/ingress
+      required: []
+      optional: true

@@ -1,22 +1,24 @@
 ---
-application:
-  name: linkwarden
-  state: present
-  description: Linkwarden bookmark archive and search stack
+schema: cloin.incus-compose/v1
+name: linkwarden
+state: present
+description: Linkwarden bookmark archive and search stack
+placement: "{{ incus_app_placement }}"
 
-  defaults:
-    storage_pool: "{{ incus_default_storage_pool }}"
-    network: private
-    profiles: []
-    config:
-      limits.cpu: "2"
-      limits.memory: 2GiB
+defaults:
+  storage_pool: "{{ incus_default_storage_pool }}"
+  network: private
+  profiles: []
+  config:
+    limits.cpu: "2"
+    limits.memory: 2GiB
 
 services:
   web:
-    kind: application-container
+    type: oci
     image: ghcr:linkwarden/linkwarden:v2.16.0
-    root_size: 8GiB
+    root:
+      size: 8GiB
 
     environment:
       DATABASE_URL: >-
@@ -33,13 +35,13 @@ services:
       - name: private
       - name: ingress
 
-    ingress:
+    routes:
       - host: "links.{{ lab_domain }}"
         port: 3000
         scheme: http
 
     # Ansible uses this managed listener for bootstrap/runtime health checks.
-    expose:
+    ports:
       - name: legacy-http
         protocol: tcp
         listen_port: 3000
@@ -58,9 +60,10 @@ services:
       retries: 60
 
   postgres:
-    kind: application-container
+    type: oci
     image: docker:library/postgres:16-alpine
-    root_size: 4GiB
+    root:
+      size: 4GiB
 
     environment:
       POSTGRES_DB: postgres
@@ -82,9 +85,10 @@ services:
       limits.memory: 1GiB
 
   meilisearch:
-    kind: application-container
+    type: oci
     image: docker:getmeili/meilisearch:v1.12.8
-    root_size: 4GiB
+    root:
+      size: 4GiB
 
     environment:
       MEILI_ENV: production
@@ -131,19 +135,20 @@ volumes:
       snapshots.schedule: "@daily"
       snapshots.expiry: 7d
 
-secrets:
-  - path: incus-apps/apps/linkwarden
-    required:
-      - lab_linkwarden_postgres_password
-      - lab_linkwarden_nextauth_secret
-      - lab_linkwarden_meili_key
-    generate:
-      lab_linkwarden_postgres_password:
-        type: random_string
-        length: 48
-      lab_linkwarden_nextauth_secret:
-        type: random_string
-        length: 64
-      lab_linkwarden_meili_key:
-        type: random_string
-        length: 48
+x-incus-apps:
+  secrets:
+    - path: incus-apps/apps/linkwarden
+      required:
+        - lab_linkwarden_postgres_password
+        - lab_linkwarden_nextauth_secret
+        - lab_linkwarden_meili_key
+      generate:
+        lab_linkwarden_postgres_password:
+          type: random_string
+          length: 48
+        lab_linkwarden_nextauth_secret:
+          type: random_string
+          length: 64
+        lab_linkwarden_meili_key:
+          type: random_string
+          length: 48

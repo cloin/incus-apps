@@ -4,9 +4,9 @@
     file: "{{ _application_path }}"
     name: _application_file
 
-- name: Reconcile {{ _application_file.application.name }}
+- name: Reconcile {{ _application_file.name }}
   ansible.builtin.include_role:
-    name: application
+    name: cloin.incus_compose.application
   vars:
-    incus_application_definition: "{{ _application_file }}"
-    incus_application_update: "{{ _application_update | default(false) }}"
+    incus_compose_application: "{{ _application_file }}"
+    incus_compose_update: "{{ _application_update | default(false) }}"

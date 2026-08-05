@@ -23,10 +23,10 @@
         name: _application_file
 
   roles:
-    - role: application
-      incus_application_definition: "{{ _application_file }}"
-      incus_application_state_override: absent
-      incus_application_destroy_data: "{{ destroy_data | default(false) | bool }}"
+    - role: cloin.incus_compose.application
+      incus_compose_application: "{{ _application_file }}"
+      incus_compose_state_override: absent
+      incus_compose_destroy_data: "{{ destroy_data | default(false) | bool }}"
 
 - name: Reconcile Caddy after application removal
   ansible.builtin.import_playbook: reconcile_ingress.yml

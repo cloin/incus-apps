@@ -74,7 +74,7 @@
       ansible.builtin.set_fact:
         _incus_ingress_routes: >-
           {{ _incus_application_catalog |
-             incus_app_ingress_bindings(
+             cloin.incus_compose.route_bindings(
              _incus_ingress_instances.stdout | from_json) }}
 
     - name: Verify HTTPS routes through shared Caddy ingress

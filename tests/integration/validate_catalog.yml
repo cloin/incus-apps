@@ -1,0 +1,33 @@
+---
+- name: Render and validate the bundled application catalog
+  hosts: incus_api
+  gather_facts: false
+  vars_files:
+    - ../../config/lab.example.yml
+  vars:
+    incus_apps_catalog_directory: "{{ playbook_dir }}/../../apps"
+    lab_gitea_admin_username: test
+    lab_gitea_admin_password: test-password
+    lab_gitea_admin_email: test@example.invalid
+    lab_gitea_webhook_secret: test-webhook
+    lab_semaphore_admin_username: test
+    lab_semaphore_admin_password: test-password
+    lab_semaphore_admin_email: test@example.invalid
+    lab_semaphore_cookie_hash: test-cookie-hash
+    lab_semaphore_cookie_encryption: test-cookie-encryption
+    lab_semaphore_access_key_encryption: test-access-key
+    lab_semaphore_incus_client_cert: test-certificate
+    lab_semaphore_incus_client_key: test-key
+    lab_semaphore_incus_server_cert: test-server-certificate
+  tasks:
+    - name: Load and validate application definitions
+      ansible.builtin.include_tasks: ../../playbooks/tasks/load_catalog.yml
+
+    - name: Verify every platform definition was rendered
+      ansible.builtin.assert:
+        that:
+          - _incus_application_catalog | length == 4
+          - >-
+            _incus_application_catalog |
+            map(attribute='name') | sort ==
+            ['gitea', 'ingress', 'openbao', 'semaphore']

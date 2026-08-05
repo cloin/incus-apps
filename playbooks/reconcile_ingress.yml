@@ -14,7 +14,7 @@
       ansible.builtin.set_fact:
         _incus_ingress_catalog: >-
           {{ _incus_application_catalog |
-             rejectattr('application.name', 'in',
+             rejectattr('name', 'in',
              incus_ingress_excluded_applications | default([])) | list }}
 
     - name: Query live Incus instances after application reconciliation
@@ -32,15 +32,15 @@
       delay: 2
       until: >-
         (_incus_ingress_catalog |
-         incus_app_ingress_bindings(
+         cloin.incus_compose.route_bindings(
          _incus_ingress_instances.stdout | from_json, false) | length) ==
-        (_incus_ingress_catalog | incus_app_ingress_count)
+        (_incus_ingress_catalog | cloin.incus_compose.route_count)
 
     - name: Resolve desired routes to live ingress addresses
       ansible.builtin.set_fact:
         _incus_ingress_routes: >-
           {{ _incus_ingress_catalog |
-             incus_app_ingress_bindings(
+             cloin.incus_compose.route_bindings(
              _incus_ingress_instances.stdout | from_json) }}
 
     - name: Register live Caddy configuration for the following plays

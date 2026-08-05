@@ -11,6 +11,12 @@ incus_default_storage_pool: default
 incus_validate_certs: false
 incus_app_network_prefix: "10.210"
 
+# Leave empty on standalone Incus. On a cluster, every bundled bridge-backed
+# application must be co-located on one online member.
+incus_app_placement: {}
+# incus_app_placement:
+#   member: node1
+
 # Paths belonging to the already-trusted Incus CLI identity on the Ansible
 # controller. INCUS_CLIENT_CERT_PATH, INCUS_CLIENT_KEY_PATH, and
 # INCUS_SERVER_CERT_PATH take precedence when exported.

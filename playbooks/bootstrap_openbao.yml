@@ -19,20 +19,20 @@
         that:
           - >-
             ([_ingress_application_file, _openbao_application_file] |
-             incus_app_validate_catalog)
+             cloin.incus_compose.validate_catalog)
 
   tasks:
     - name: Reconcile the shared ingress foundation
       ansible.builtin.include_role:
-        name: application
+        name: cloin.incus_compose.application
       vars:
-        incus_application_definition: "{{ _ingress_application_file }}"
+        incus_compose_application: "{{ _ingress_application_file }}"
 
     - name: Reconcile the OpenBao application primitives
       ansible.builtin.include_role:
-        name: application
+        name: cloin.incus_compose.application
       vars:
-        incus_application_definition: "{{ _openbao_application_file }}"
+        incus_compose_application: "{{ _openbao_application_file }}"
 
 - name: Install and start OpenBao
   ansible.builtin.import_playbook: provision_openbao.yml

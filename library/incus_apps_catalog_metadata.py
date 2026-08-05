@@ -44,19 +44,16 @@ def run_module() -> None:
         except (OSError, yaml.YAMLError) as exc:
             module.fail_json(msg=f"cannot read application metadata from {path}: {exc}")
 
-        application = definition.get("application", {})
-        name = application.get("name") if isinstance(application, dict) else None
+        name = definition.get("name") if isinstance(definition, dict) else None
         if not name:
-            module.fail_json(msg=f"{path} does not declare application.name")
+            module.fail_json(msg=f"{path} does not declare name")
         if requested_application and name != requested_application:
             continue
         metadata.append(
             {
-                "application": {
-                    "name": name,
-                    "state": application.get("state", "present"),
-                },
-                "secrets": definition.get("secrets", []),
+                "name": name,
+                "state": definition.get("state", "present"),
+                "x-incus-apps": definition.get("x-incus-apps", {}),
                 "source": path,
             }
         )

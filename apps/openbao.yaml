@@ -1,19 +1,21 @@
 ---
-application:
-  name: openbao
-  state: present
-  description: OpenBao secrets service for Incus application automation
+schema: cloin.incus-compose/v1
+name: openbao
+state: present
+description: OpenBao secrets service for Incus application automation
+placement: "{{ incus_app_placement }}"
 
-  defaults:
-    storage_pool: "{{ incus_default_storage_pool }}"
-    network: private
-    profiles: []
+defaults:
+  storage_pool: "{{ incus_default_storage_pool }}"
+  network: private
+  profiles: []
 
 services:
   openbao:
-    kind: system-container
+    type: container
     image: images:debian/13
-    root_size: 8GiB
+    root:
+      size: 8GiB
     recreate_on_source_change: false
     network_manager: systemd-networkd
 
@@ -33,7 +35,7 @@ services:
       - name: private
       - name: ingress
 
-    ingress:
+    routes:
       - host: "{{ openbao_hostname }}"
         port: 8200
         scheme: http

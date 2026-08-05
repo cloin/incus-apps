@@ -21,7 +21,10 @@ def test_yaml_jinja_expressions_parse():
     environment = Environment()
 
     for path in repository_root.rglob("*.yml"):
-        if any(part in {".venv", ".cache", "recovery"} for part in path.parts):
+        if any(
+            part in {".ansible", ".venv", ".cache", "recovery"}
+            for part in path.parts
+        ):
             continue
         for document in yaml.safe_load_all(path.read_text()):
             for value in _strings(document):

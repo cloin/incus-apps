@@ -10,3 +10,4 @@ def test_example_network_prefix_is_loaded_as_a_string():
     )
 
     assert configuration["incus_app_network_prefix"] == "10.210"
+    assert configuration["incus_app_placement"] == {}

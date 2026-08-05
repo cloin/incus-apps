@@ -1,266 +1,101 @@
-# Application definition schema
+# Application definitions
 
-An application file describes an Incus project and the services, networks, and
-volumes that belong to it. Logical names are local to the application; the role
-resolves them to project-scoped or namespaced Incus resources.
+Files under `apps/` use the strict `cloin.incus-compose/v1` schema implemented
+by the Git-pinned
+[`cloin.incus_compose`](https://github.com/cloin/ansible-collection-incus-compose)
+collection. The reusable collection owns Incus projects, networks, volumes,
+OCI containers, system containers, virtual machines, dependency ordering,
+route discovery, collision validation, and explicit cluster placement. This
+repository keeps Caddy, OpenBao, Gitea, and Semaphore policy local.
 
-```yaml
-application:
-  name: example
-  state: present
-  description: Example mixed workload
-  # project: optional-project-override
-  defaults:
-    storage_pool: local
-    network: private
-    profiles: []
-    config:
-      limits.cpu: "2"
-      limits.memory: 2GiB
+Use [`examples/apps/linkwarden.yaml`](../examples/apps/linkwarden.yaml) as a
+complete multi-service example. The collection's version-matched schema
+reference is installed at
+`ansible_collections/cloin/incus_compose/docs/application-schema.md` and is also
+available in its Git repository.
 
-services:
-  api:
-    kind: application-container
-    image: ghcr:owner/api:1.2.3
-    root_size: 8GiB
-    environment:
-      DATABASE_URL: postgresql://postgres/example
-    networks:
-      - private
-      - name: ingress
-        # Optional; omit to use Incus DHCP/IPAM.
-        ipv4_address: 10.210.250.20
-    volumes:
-      data: /srv/data
-    depends_on:
-      postgres:
-        condition: healthy
-    ingress:
-      - host: "example.{{ lab_domain }}"
-        port: 8080
-        scheme: http
-        network: ingress
-    expose:
-      - name: metrics
-        protocol: tcp
-        listen_address: 192.0.2.10
-        listen_port: 9101
-        target_port: 9100
-    healthcheck:
-      http: http://192.0.2.10:8080/health
-      status: [200]
-      interval: 3
-      retries: 30
+## Project conventions
 
-  worker:
-    kind: system-container
-    image: images:debian/13
-    network_manager: systemd-networkd
-    update:
-      strategy: packages
-      command: [sh, -lc, "apt-get update && apt-get -y dist-upgrade"]
+The bundled definitions use these collection fields:
 
-  appliance:
-    kind: virtual-machine
-    image: images:debian/13/cloud
-    root_size: 20GiB
-    recreate_on_source_change: false
-    config:
-      limits.cpu: "4"
-      limits.memory: 8GiB
+- `type: oci`, `container`, or `vm` selects the Incus instance kind.
+- `root: {pool, size}` configures the instance root disk.
+- `routes` describes provider-neutral HTTP upstreams that this project renders
+  into Caddy.
+- `ports` creates explicit TCP/UDP Incus proxy devices for protocols that
+  cannot be routed by hostname.
+- `networks` and `volumes` refer to logical application resources.
+- `placement.member` is required by the collection on an Incus cluster and is
+  rejected on standalone Incus.
 
-networks:
-  private:
-    type: bridge
-    config:
-      ipv4.address: 10.210.10.1/24
-      ipv4.nat: true
-      ipv6.address: none
-
-  ingress:
-    external: true
-    name: ingress
-
-volumes:
-  data:
-    pool: local
-    size: 20GiB
-    retain: true
-    config:
-      snapshots.schedule: "@daily"
-      snapshots.expiry: 7d
-```
-
-## Service fields
-
-`kind` selects `application-container`, `system-container`, or
-`virtual-machine`. `image`/`source` uses Incus remote notation; the built-in
-aliases `docker:` and `ghcr:` select OCI registries, while `images:` selects the
-Linux Containers image server.
-
-`profiles`, `root_pool`, `root_size`, `target`, `ephemeral`, `config`, and
-`devices` expose native Incus controls. A service can override application
-defaults. `name` changes the physical instance name without changing the logical
-dependency/DNS name used in the definition.
-
-`networks` is a list of logical network names or attachment mappings. A string
-such as `private` requests normal Incus DHCP. A mapping accepts `name` plus
-optional `ipv4_address` and `ipv6_address` values. When `networks` is omitted,
-the application default is attached. `volumes` maps logical volume names to
-mount paths.
-
-System-container images do not all configure additional NICs automatically.
-Set `network_manager: systemd-networkd` when the image uses networkd and a
-service has multiple attachments; the role installs a DHCP configuration for
-all `eth*` interfaces. Application containers receive their network setup from
-Incus and do not need this option.
-
-`depends_on` accepts a list or mapping. The role performs a stable topological
-sort and rejects unknown dependencies or cycles. Dependencies are reconciled and
-health-checked before dependent services.
-
-`environment` is converted to Incus `environment.*` keys and is hidden from
-normal Ansible task output. Secret values should be Jinja references declared in
-the application's `secrets` section. The runtime loads those variables from
-OpenBao before it renders the complete catalog; never commit literal secret
-values to Git.
-
-## HTTP ingress
-
-Any service may declare `ingress`; the role does not infer which services ought
-to be public. Each entry has these fields:
-
-- `host`: required FQDN, unique across the complete application catalog.
-- `port`: required upstream service port.
-- `scheme`: optional `http` (default) or `https` connection from Caddy to the
-  service.
-- `network`: optional logical network name, defaulting to `ingress`. The service
-  must attach that network.
-
-All HTTP routes share the Incus host's ports 80 and 443. Caddy selects the
-upstream by hostname, so adding applications does not consume additional host
-ports. An app can have multiple hostnames, and a private service such as a
-database is allowed to declare an HTTP route if it actually speaks HTTP.
-Non-HTTP database protocols belong under `expose` instead.
-
-`group_vars/all/lab.yml` declares accepted ingress domains and their
-certificate mode.
-This permits gradual migrations in which some domains retain Caddy's internal
-CA while a Cloudflare-managed domain uses DNS-01 certificates:
+`incus_app_placement` in `group_vars/all/lab.yml` supplies placement to every
+bundled definition. Keep it `{}` on standalone Incus. On a cluster, select one
+online member:
 
 ```yaml
-incus_ingress_domains:
-  - name: lab.example.net
-    tls_mode: internal
-  - name: lab.example.org
-    tls_mode: cloudflare
+incus_app_placement:
+  member: node1
 ```
 
-Every route host must be below one of these domains. For the first bootstrap,
-Cloudflare mode reads `INCUS_APPS_CLOUDFLARE_API_TOKEN` from the controller
-environment and stores it in OpenBao. Semaphore receives it only at task
-runtime through its read-only AppRole.
+All applications using the native shared `ingress` bridge must be co-located;
+a node-local bridge does not span cluster members. The collection creates
+managed networks through Incus's pending-member/finalize sequence and targets
+custom volumes only when their storage driver is local. It omits placement for
+shared storage.
 
-The ingress reconciliation runs after application reconciliation. It reads
-`incus list --all-projects`, matches each route to the service's NIC on the
-physical ingress network, and renders Caddy from that live IPv4 address. It
-never assumes that a previous DHCP lease is still current.
+## Routes, ports, and IPAM
 
-### DHCP, static addresses, and IPAM
+Any service may declare a `routes` entry if it intentionally speaks HTTP. Caddy
+shares host ports 80 and 443 and chooses an upstream by hostname, so normal
+applications do not need unique external ports. `ports` is deliberately
+open-ended with respect to workload type and is appropriate for SSH, database,
+DNS, or game protocols. Catalog validation rejects conflicting listeners.
 
-Omit address fields for the normal case. The managed Incus bridge supplies DHCP,
-tracks the allocation, and registers it in its network state. Caddy does not
-need a stable address because every run resolves the current allocation before
-rendering its configuration.
+Omit a network attachment address to use Incus DHCP/IPAM. Caddy reconciliation
+reads the live IPv4 allocation on every run, so a DHCP address need not remain
+stable. An explicit `ipv4_address` becomes an Incus NIC reservation; validation
+rejects duplicate addresses on the same physical network and addresses outside
+a managed subnet.
 
-For an external consumer that genuinely needs a stable address, declare it on
-the attachment:
+## OpenBao extension metadata
+
+The collection accepts namespaced `x-*` metadata but does not interpret it.
+This project declares OpenBao requirements under `x-incus-apps`:
 
 ```yaml
-networks:
-  - name: ingress
-    ipv4_address: 10.210.250.20
+x-incus-apps:
+  secrets:
+    - path: incus-apps/apps/example
+      required:
+        - example_database_password
+        - example_api_key
+      generate:
+        example_database_password:
+          type: random_string
+          length: 48
 ```
 
-That becomes the NIC's Incus `ipv4.address`, keeping the reservation visible to
-Incus DHCP/IPAM. Do not configure the same address manually inside the guest.
-Catalog validation rejects duplicate explicit addresses on the same physical
-network and addresses outside a managed network's subnet. This is what "stable
-ingress IPs must not overlap" means: two declarative reservations cannot claim
-the same layer-3 address. It does not mean each application needs a separate
-subnet or that DHCP ranges from different, isolated networks cannot reuse
-addresses.
+`required` lists the Ansible variables needed to render the application.
+`generate` is optional and supports random strings from 16 through 256
+characters. Omit a key from `generate` when an operator or external system must
+supply it. Set `optional: true` only when the entire KV group may be absent.
 
-## Raw TCP and UDP exposure
-
-Use `expose` for SSH, databases, game servers, DNS, and other protocols that
-cannot be routed by HTTP hostname:
-
-```yaml
-expose:
-  - name: postgres
-    protocol: tcp
-    listen_address: 192.0.2.10
-    listen_port: 5432
-    target_address: 127.0.0.1
-    target_port: 5432
-```
-
-`protocol` is `tcp` or `udp`. Addresses default to `0.0.0.0` and `127.0.0.1`.
-Ports are always explicit: catalog validation rejects collisions for the same
-protocol when addresses are equal or either listener is a wildcard. Explicit,
-stable ports are preferable to random ports because clients and firewall rules
-remain reproducible. Native `devices` remain available for advanced Incus proxy
-options; a service cannot reuse a device name in both fields.
-
-## Updates and replacement safety
-
-`update.strategy: recreate` is the default for OCI application containers. The
-update-all playbook removes and re-creates their root filesystems while retaining
-attached custom volumes. System containers and VMs default to `packages` and run
-the declared update command in place.
-
-Changing the source of a system container or VM requires
-`recreate_on_source_change: true`; this deliberate guard avoids destroying a
-stateful OS instance because of an accidental image edit.
-
-Volumes default to `retain: true`. Removing an application therefore preserves
-data and leaves its project when necessary. Data deletion requires the explicit
-`destroy_data=true` playbook option.
-
-## OpenBao secrets
-
-An application can declare one or more KV v2 groups without putting their
-values in Git:
-
-```yaml
-secrets:
-  - path: incus-apps/apps/example
-    required:
-      - example_database_password
-      - example_api_key
-    generate:
-      example_database_password:
-        type: random_string
-        length: 48
-```
-
-`required` lists the Ansible variables that must exist before the catalog can
-render. `generate` is optional and currently supports random strings between 16
-and 256 characters. A generated key must also appear in `required`. Omit a key
-from `generate` when an operator or external system must supply its value.
-
-After adding a definition, prepare its secret group before the first GitOps
-run:
+Prepare a new application's secret group before its first GitOps run:
 
 ```sh
 scripts/run-playbook playbooks/prepare_app.yml -e app=example
 ```
 
-Preparation creates only missing generated values and uses OpenBao KV
-check-and-set semantics. It does not overwrite existing values. If a required
-value has no generator, add it through OpenBao and run the command again.
+Preparation creates only absent generated values with OpenBao KV check-and-set
+semantics. It never overwrites existing values.
 
-Set `optional: true` only when the entire KV group may be absent. This is useful
-for integrations such as optional DNS providers; it does not make individual
-members of a present group optional.
+## Updates and removal
+
+OCI services default to `update.strategy: recreate`; attached custom volumes
+remain. System containers and VMs default to in-place package updates. Changing
+the source of a system container or VM requires
+`recreate_on_source_change: true`.
+
+Custom volumes default to `retain: true`. Removing an application therefore
+preserves its data and, when necessary, its project. The remove playbook only
+deletes retained data when explicitly run with `-e destroy_data=true`.

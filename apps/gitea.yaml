@@ -1,21 +1,23 @@
 ---
-application:
-  name: gitea
-  state: present
-  description: Git service for the Incus applications repository
+schema: cloin.incus-compose/v1
+name: gitea
+state: present
+description: Git service for the Incus applications repository
+placement: "{{ incus_app_placement }}"
 
-  defaults:
-    storage_pool: "{{ incus_default_storage_pool }}"
-    network: private
-    profiles: []
+defaults:
+  storage_pool: "{{ incus_default_storage_pool }}"
+  network: private
+  profiles: []
 services:
   gitea:
     name: git
-    kind: application-container
+    type: oci
     image: gitea:1.27.1
     source_server: https://docker.gitea.com
     source_protocol: oci
-    root_size: 8GiB
+    root:
+      size: 8GiB
 
     environment:
       USER_UID: "1000"
@@ -39,12 +41,12 @@ services:
       - name: private
       - name: ingress
 
-    ingress:
+    routes:
       - host: "{{ gitea_hostname }}"
         port: 3000
         scheme: http
 
-    expose:
+    ports:
       # Ansible uses this managed listener for bootstrap/runtime health checks.
       - name: legacy-http
         protocol: tcp
@@ -86,10 +88,11 @@ volumes:
       snapshots.schedule: "@daily"
       snapshots.expiry: 14d
 
-secrets:
-  - path: incus-apps/gitea
-    required:
-      - lab_gitea_admin_username
-      - lab_gitea_admin_password
-      - lab_gitea_admin_email
-      - lab_gitea_webhook_secret
+x-incus-apps:
+  secrets:
+    - path: incus-apps/gitea
+      required:
+        - lab_gitea_admin_username
+        - lab_gitea_admin_password
+        - lab_gitea_admin_email
+        - lab_gitea_webhook_secret

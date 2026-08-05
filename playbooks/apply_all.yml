@@ -7,24 +7,13 @@
     - name: Load application secrets from OpenBao
       ansible.builtin.include_tasks: tasks/load_openbao_secrets.yml
 
-    - name: Load and validate the application catalog
-      ansible.builtin.include_tasks: tasks/load_catalog.yml
-
   tasks:
-    - name: Reconcile the shared ingress foundation first
-      ansible.builtin.include_tasks: tasks/apply_file.yml
+    - name: Reconcile the application catalog
+      ansible.builtin.include_role:
+        name: cloin.incus_compose.catalog
       vars:
-        _application_path: "{{ playbook_dir }}/../apps/ingress.yaml"
-
-    - name: Reconcile application definitions
-      ansible.builtin.include_tasks: tasks/apply_file.yml
-      loop: >-
-        {{ query('ansible.builtin.fileglob', playbook_dir ~ '/../apps/*.yaml') |
-           reject('equalto', playbook_dir ~ '/../apps/ingress.yaml') | sort }}
-      loop_control:
-        loop_var: _application_path
-        label: "{{ _application_path | basename }}"
-      when: _application_path | basename != 'ingress.yaml'
+        incus_compose_catalog_directory: "{{ playbook_dir }}/../apps"
+        incus_compose_resolve_routes: false
 
 - name: Reconcile Caddy after all applications
   ansible.builtin.import_playbook: reconcile_ingress.yml

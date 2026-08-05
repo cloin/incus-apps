@@ -1,5 +1,8 @@
 ---
 collections:
+  - name: https://github.com/cloin/ansible-collection-incus-compose.git
+    type: git
+    version: v0.1.0
   - name: damex.incus
     version: ">=1.11.8,<2.0.0"
   - name: community.general

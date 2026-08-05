@@ -6,8 +6,10 @@ topology, and runs one playbook. The result is a private Gitea source of truth,
 a Semaphore automation controller, OpenBao-backed runtime secrets, and shared
 Caddy ingress for application definitions under `apps/`.
 
-This is intended for a single-host homelab or development lab. It is not an
-HA OpenBao, database, or production disaster-recovery design.
+This is intended for a homelab or development lab on standalone Incus or an
+existing Incus cluster. Clustered deployments deliberately co-locate the
+bridge-backed stack on one member; this is not an HA OpenBao, database, or
+production disaster-recovery design.
 
 ## What the bootstrap creates
 
@@ -63,7 +65,7 @@ different architecture or long after a release update.
 git clone https://github.com/cloin/incus-apps.git
 cd incus-apps
 python3 -m pip install 'ansible-core>=2.20,<2.21' cryptography
-ansible-galaxy collection install -r requirements.yml
+ansible-galaxy collection install -r requirements.yml -p .ansible/collections
 ```
 
 Use a virtual environment if your operating system manages its Python packages.
@@ -78,6 +80,8 @@ Edit `group_vars/all/lab.yml` and replace every `CHANGE_ME`. This file contains
 configuration, not credentials. Important values are:
 
 - the Incus remote, HTTPS API URL, LAN address, and storage pool;
+- an empty `incus_app_placement` for standalone Incus, or one online cluster
+  member shared by the bundled bridge-backed applications;
 - absolute paths to the controller's Incus client certificate, key, and pinned
   server certificate;
 - an unused private `/16` prefix expressed as a quoted two-octet string, such
@@ -245,18 +249,19 @@ private bridge needs a distinct third octet when using the default network
 scheme. The application can declare values that OpenBao should generate:
 
 ```yaml
-secrets:
-  - path: incus-apps/apps/linkwarden
-    required:
-      - lab_linkwarden_postgres_password
-      - lab_linkwarden_nextauth_secret
-    generate:
-      lab_linkwarden_postgres_password:
-        type: random_string
-        length: 48
-      lab_linkwarden_nextauth_secret:
-        type: random_string
-        length: 64
+x-incus-apps:
+  secrets:
+    - path: incus-apps/apps/linkwarden
+      required:
+        - lab_linkwarden_postgres_password
+        - lab_linkwarden_nextauth_secret
+      generate:
+        lab_linkwarden_postgres_password:
+          type: random_string
+          length: 48
+        lab_linkwarden_nextauth_secret:
+          type: random_string
+          length: 64
 ```
 
 Prepare those values before the first push:
@@ -275,9 +280,10 @@ Git or the webhook payload. `scripts/push` retrieves the Gitea access token from
 OpenBao for that one command and refuses to send it anywhere except the expected
 private origin; it does not write the token to Git configuration or disk.
 
-See [the application schema](docs/application-schema.md) for containers versus
-VMs, volumes, dependencies, health checks, DHCP/static IPAM, raw TCP/UDP
-exposure, ingress, updates, removal safety, and secret declarations.
+See [the application schema](docs/application-schema.md) for the strict
+collection schema, containers versus VMs, cluster placement, volumes,
+dependencies, health checks, DHCP/static IPAM, ports, routes, removal safety,
+and this project's OpenBao extension.
 
 ## Day-two operations
 

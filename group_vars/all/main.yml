@@ -11,6 +11,15 @@ incus_server_cert_path: >-
   {{ lookup('ansible.builtin.env', 'INCUS_SERVER_CERT_PATH') |
      default(incus_controller_server_cert_path | default(''), true) }}
 
+incus_compose_connection:
+  remote: "{{ incus_remote }}"
+  url: "{{ incus_api_url }}"
+  client_cert_path: "{{ incus_client_cert_path }}"
+  client_key_path: "{{ incus_client_key_path }}"
+  server_cert_path: "{{ incus_server_cert_path }}"
+  validate_certs: "{{ incus_validate_certs }}"
+incus_compose_default_storage_pool: "{{ incus_default_storage_pool }}"
+
 incus_lab_address: "{{ incus_host_address }}"
 gitea_hostname: "git.{{ lab_domain }}"
 gitea_public_url: "https://{{ gitea_hostname }}"

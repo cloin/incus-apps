@@ -31,9 +31,9 @@
 
     - name: Reconcile requested application
       ansible.builtin.include_role:
-        name: application
+        name: cloin.incus_compose.application
       vars:
-        incus_application_definition: "{{ _requested_application_file }}"
+        incus_compose_application: "{{ _requested_application_file }}"
 
 - name: Reconcile the requested OpenBao service installation
   ansible.builtin.import_playbook: provision_openbao.yml
