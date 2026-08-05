@@ -16,8 +16,8 @@ from incus_apps import (  # noqa: E402
 
 
 def test_lab_address_and_network_prefix_validation():
-    assert incus_app_is_ipv4_address("192.168.4.121") is True
-    assert incus_app_is_ipv4_address("192.168.4.999") is False
+    assert incus_app_is_ipv4_address("192.0.2.10") is True
+    assert incus_app_is_ipv4_address("192.0.2.999") is False
     assert incus_app_is_private_ipv4_prefix("10.210") is True
     assert incus_app_is_private_ipv4_prefix("172.31") is True
     assert incus_app_is_private_ipv4_prefix("172.32") is False
