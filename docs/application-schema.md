@@ -80,7 +80,9 @@ x-incus-apps:
 characters. Omit a key from `generate` when an operator or external system must
 supply it. Set `optional: true` only when the entire KV group may be absent.
 
-Prepare a new application's secret group before its first GitOps run:
+Bootstrap and Apply All create missing groups whose required values all have
+generators. Generated groups must live at `incus-apps/apps/<application>` or
+beneath that path. For an existing group that needs repair, run:
 
 ```sh
 scripts/run-playbook playbooks/prepare_app.yml -e app=example

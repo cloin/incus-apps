@@ -9,6 +9,7 @@ from ansible.errors import AnsibleFilterError
 sys.path.insert(0, str(pathlib.Path(__file__).parents[2] / "filter_plugins"))
 
 from incus_apps import (  # noqa: E402
+    incus_app_generated_secret_path,
     incus_app_is_ipv4_address,
     incus_app_is_private_ipv4_prefix,
     incus_app_secret_specs,
@@ -49,6 +50,7 @@ def test_project_extension_secret_requirements_are_normalized():
             "generate": {
                 "example_password": {"type": "random_string", "length": 48}
             },
+            "application": "example",
         }
     ]
 
@@ -61,3 +63,12 @@ def test_project_extension_rejects_duplicate_secret_paths():
                 _metadata("two", "incus-apps/shared"),
             ]
         )
+
+
+def test_generated_secrets_are_scoped_to_the_declaring_application():
+    assert incus_app_generated_secret_path("incus-apps/apps/example", "example")
+    assert incus_app_generated_secret_path("incus-apps/apps/example/database", "example")
+    assert not incus_app_generated_secret_path("incus-apps/apps/other", "example")
+    assert not incus_app_generated_secret_path("incus-apps/apps/example-other", "example")
+    assert not incus_app_generated_secret_path("incus-apps/semaphore", "example")
+    assert not incus_app_generated_secret_path("incus-apps/apps/example/../semaphore", "example")

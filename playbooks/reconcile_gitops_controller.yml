@@ -1,0 +1,12 @@
+---
+- name: Provision and rotate controller OpenBao identities
+  ansible.builtin.import_playbook: initialize_openbao.yml
+
+- name: Reconcile the GitOps controller without reapplying Incus applications
+  ansible.builtin.import_playbook: configure_gitops.yml
+
+- name: Verify one controller-backed reconciliation
+  ansible.builtin.import_playbook: verify_gitops.yml
+
+- name: Retire superseded controller credentials
+  ansible.builtin.import_playbook: finalize_openbao.yml

@@ -282,7 +282,8 @@
             'INCUS_SERVER_CERT_PATH': '/home/semaphore/.config/incus/servercerts/lab.crt',
             'INCUS_VALIDATE_CERTS': (incus_validate_certs | bool | ternary('true', 'false')),
             'OPENBAO_ADDR': openbao_public_url,
-            'OPENBAO_ROLE_ID': openbao_semaphore_role_id
+            'OPENBAO_ROLE_ID': openbao_semaphore_role_id,
+            'OPENBAO_GENERATOR_ROLE_ID': openbao_generator_role_id
           } | to_json }}
 
     - name: Require an AppRole SecretID for a new Semaphore environment
@@ -290,6 +291,8 @@
         that:
           - openbao_semaphore_secret_id is defined
           - openbao_semaphore_secret_id | length > 0
+          - openbao_generator_secret_id is defined
+          - openbao_generator_secret_id | length > 0
         fail_msg: >-
           A new Semaphore environment requires a freshly issued OpenBao AppRole
           SecretID. Run the complete playbooks/bootstrap_lab.yml workflow.
@@ -313,6 +316,10 @@
           secrets:
             - name: OPENBAO_SECRET_ID
               secret: "{{ openbao_semaphore_secret_id }}"
+              type: env
+              operation: create
+            - name: OPENBAO_GENERATOR_SECRET_ID
+              secret: "{{ openbao_generator_secret_id }}"
               type: env
               operation: create
         status_code: 201
@@ -383,6 +390,23 @@
                      map(attribute='name') | list)
                  else 'create' }}
       when: openbao_semaphore_secret_id is defined
+      no_log: true
+
+    - name: Add the scoped generator SecretID update operation
+      ansible.builtin.set_fact:
+        _gitops_environment_secret_operations: >-
+          {{ _gitops_environment_secret_operations + [{
+            'id': (_semaphore_environment_current.json.secrets | default([]) |
+                   selectattr('name', 'equalto', 'OPENBAO_GENERATOR_SECRET_ID') |
+                   map(attribute='id') | first | default(0)),
+            'name': 'OPENBAO_GENERATOR_SECRET_ID',
+            'secret': openbao_generator_secret_id,
+            'type': 'env',
+            'operation': ('update' if 'OPENBAO_GENERATOR_SECRET_ID' in
+              (_semaphore_environment_current.json.secrets | default([]) |
+               map(attribute='name') | list) else 'create')
+          }] }}
+      when: openbao_generator_secret_id is defined
       no_log: true
 
     - name: Reconcile the Semaphore runtime environment
@@ -466,6 +490,67 @@
         _apply_all_template_id: >-
           {{ (_semaphore_templates_current.json |
               selectattr('name', 'equalto', 'Apply All') | first).id }}
+
+    - name: List Semaphore schedules
+      ansible.builtin.uri:
+        url: "{{ _semaphore_url }}/api/project/{{ _gitops_project_id }}/schedules"
+        headers:
+          Cookie: "{{ _semaphore_login.cookies_string }}"
+        status_code: 200
+      register: _gitops_schedules
+      no_log: true
+
+    - name: Select the managed hourly reconciliation schedule
+      ansible.builtin.set_fact:
+        _gitops_managed_schedules: >-
+          {{ _gitops_schedules.json |
+             selectattr('name', 'equalto', 'Hourly Apply All') |
+             sort(attribute='id') | list }}
+
+    - name: Create the hourly reconciliation schedule
+      ansible.builtin.uri:
+        url: "{{ _semaphore_url }}/api/project/{{ _gitops_project_id }}/schedules"
+        method: POST
+        headers:
+          Cookie: "{{ _semaphore_login.cookies_string }}"
+        body_format: json
+        body:
+          name: Hourly Apply All
+          project_id: "{{ _gitops_project_id }}"
+          template_id: "{{ _apply_all_template_id }}"
+          cron_format: "0 * * * *"
+          active: true
+          type: ""
+        status_code: 201
+      when: _gitops_managed_schedules | length == 0
+      no_log: true
+
+    - name: Correct the hourly reconciliation schedule
+      ansible.builtin.uri:
+        url: >-
+          {{ _semaphore_url }}/api/project/{{ _gitops_project_id
+          }}/schedules/{{ (_gitops_managed_schedules | first).id }}
+        method: PUT
+        headers:
+          Cookie: "{{ _semaphore_login.cookies_string }}"
+        body_format: json
+        body: >-
+          {{ (_gitops_managed_schedules | first) | combine({
+            'template_id': _apply_all_template_id | int,
+            'cron_format': '0 * * * *',
+            'active': true,
+            'type': '',
+            'repository_id': none
+          }) }}
+        status_code: 204
+      when:
+        - _gitops_managed_schedules | length > 0
+        - >-
+          (_gitops_managed_schedules | first).template_id | int != _apply_all_template_id | int or
+          (_gitops_managed_schedules | first).cron_format != '0 * * * *' or
+          not ((_gitops_managed_schedules | first).active | bool) or
+          (_gitops_managed_schedules | first).repository_id | default(none) is not none
+      no_log: true
 
     - name: List Semaphore integrations
       ansible.builtin.uri:

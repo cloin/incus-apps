@@ -111,6 +111,7 @@ def _secret_entries(definition: Mapping, application_name: str) -> list[dict]:
         entry["required"] = required
         entry["optional"] = bool(entry.get("optional", False))
         entry["generate"] = dict(generate)
+        entry["application"] = application_name
     return entries
 
 
@@ -140,6 +141,16 @@ def incus_app_secret_specs(definitions: list) -> list[dict]:
     return result
 
 
+def incus_app_generated_secret_path(path: str, application: str) -> bool:
+    """Allow generated values only in the declaring application's KV subtree."""
+    root = f"incus-apps/apps/{application}"
+    if path == root:
+        return True
+    if not path.startswith(root + "/"):
+        return False
+    return all(re.fullmatch(r"[a-z0-9_-]+", part) for part in path[len(root) + 1 :].split("/"))
+
+
 class FilterModule:
     """Expose only lab-specific validation and OpenBao metadata filters."""
 
@@ -148,4 +159,5 @@ class FilterModule:
             "incus_app_is_ipv4_address": incus_app_is_ipv4_address,
             "incus_app_is_private_ipv4_prefix": incus_app_is_private_ipv4_prefix,
             "incus_app_secret_specs": incus_app_secret_specs,
+            "incus_app_generated_secret_path": incus_app_generated_secret_path,
         }

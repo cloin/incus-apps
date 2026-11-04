@@ -20,6 +20,10 @@
       path "kv/metadata/incus-apps/*" {
         capabilities = ["read", "list"]
       }
+    _openbao_generator_policy: |
+      path "kv/data/incus-apps/apps/*" {
+        capabilities = ["create"]
+      }
     _openbao_operator_policy: |
       path "kv/config" {
         capabilities = ["read", "update"]
@@ -82,6 +86,14 @@
       }
 
       path "auth/approle/role/{{ openbao_semaphore_role_name }}/*" {
+        capabilities = ["create", "read", "update", "delete", "list"]
+      }
+
+      path "auth/approle/role/{{ openbao_generator_role_name }}" {
+        capabilities = ["create", "read", "update"]
+      }
+
+      path "auth/approle/role/{{ openbao_generator_role_name }}/*" {
         capabilities = ["create", "read", "update", "delete", "list"]
       }
 
@@ -346,6 +358,8 @@
       loop:
         - name: incus-apps-semaphore
           policy: "{{ _openbao_semaphore_policy }}"
+        - name: incus-apps-generator
+          policy: "{{ _openbao_generator_policy }}"
         - name: incus-apps-operator
           policy: "{{ _openbao_operator_policy }}"
       loop_control:
@@ -401,6 +415,40 @@
         body_format: json
         body:
           role_id: "{{ openbao_semaphore_role_id }}"
+        status_code: 204
+      delegate_to: openbao
+      no_log: true
+
+    - name: Reconcile the scoped generator AppRole
+      ansible.builtin.uri:
+        url: >-
+          {{ _openbao_management_url }}/v1/auth/approle/role/{{ openbao_generator_role_name }}
+        method: POST
+        headers:
+          X-Vault-Token: "{{ _openbao_admin_token }}"
+        body_format: json
+        body:
+          bind_secret_id: true
+          token_policies:
+            - incus-apps-generator
+          token_ttl: 5m
+          token_max_ttl: 15m
+          secret_id_ttl: 0
+          secret_id_num_uses: 0
+        status_code: 204
+      delegate_to: openbao
+      no_log: true
+
+    - name: Set the deterministic generator AppRole ID
+      ansible.builtin.uri:
+        url: >-
+          {{ _openbao_management_url }}/v1/auth/approle/role/{{ openbao_generator_role_name }}/role-id
+        method: POST
+        headers:
+          X-Vault-Token: "{{ _openbao_admin_token }}"
+        body_format: json
+        body:
+          role_id: "{{ openbao_generator_role_id }}"
         status_code: 204
       delegate_to: openbao
       no_log: true
@@ -594,6 +642,29 @@
           {{ _openbao_semaphore_secret.json.data.secret_id }}
         openbao_semaphore_secret_id_accessor: >-
           {{ _openbao_semaphore_secret.json.data.secret_id_accessor }}
+      no_log: true
+
+    - name: Generate a fresh scoped generator SecretID
+      ansible.builtin.uri:
+        url: >-
+          {{ _openbao_management_url }}/v1/auth/approle/role/{{ openbao_generator_role_name }}/secret-id
+        method: POST
+        headers:
+          X-Vault-Token: "{{ _openbao_admin_token }}"
+        body_format: json
+        body:
+          metadata: >-
+            {{ {'owner': 'semaphore', 'purpose': 'incus-apps-generated-secrets'} | to_json }}
+        status_code: 200
+      delegate_to: openbao
+      register: _openbao_generator_secret
+      no_log: true
+
+    - name: Retain the scoped generator SecretID only in memory
+      ansible.builtin.set_fact:
+        openbao_generator_secret_id: "{{ _openbao_generator_secret.json.data.secret_id }}"
+        openbao_generator_secret_id_accessor: >-
+          {{ _openbao_generator_secret.json.data.secret_id_accessor }}
       no_log: true
 
     - name: Verify the restricted operator login before revoking bootstrap access

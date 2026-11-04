@@ -4,6 +4,9 @@
   gather_facts: false
 
   pre_tasks:
+    - name: Prepare declared generated application secrets
+      ansible.builtin.include_tasks: tasks/prepare_generated_secrets.yml
+
     - name: Load application secrets from OpenBao
       ansible.builtin.include_tasks: tasks/load_openbao_secrets.yml
 
