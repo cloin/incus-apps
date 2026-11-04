@@ -11,6 +11,9 @@
   pre_tasks:
     - name: Load application secrets from OpenBao
       ansible.builtin.include_tasks: tasks/load_openbao_secrets.yml
+      vars:
+        openbao_secret_applications:
+          - gitea
 
   tasks:
     - name: Read the private origin URL

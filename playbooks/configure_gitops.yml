@@ -12,9 +12,10 @@
   pre_tasks:
     - name: Load application secrets from OpenBao
       ansible.builtin.include_tasks: tasks/load_openbao_secrets.yml
-
-    - name: Load the application catalog
-      ansible.builtin.include_tasks: tasks/load_catalog.yml
+      vars:
+        openbao_secret_applications:
+          - gitea
+          - semaphore
 
   tasks:
     - name: Log in to Semaphore
