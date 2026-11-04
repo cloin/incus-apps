@@ -33,14 +33,15 @@ protocols; catalog validation rejects collisions.
 The completed control loop is:
 
 ```text
-git push -> Gitea webhook -> Semaphore Apply All -> OpenBao AppRole
-                                      |
-                                      +-> Incus API
+git push -> Gitea webhook -> Semaphore Apply All -> OpenBao AppRoles -> Incus API
+                  hourly schedule -----------^
 ```
 
-Semaphore stores one OpenBao AppRole SecretID, not the lab's application
-secrets. Each task exchanges it for a short-lived, read-only token, loads the
-declared KV values into memory, renders the catalog, and reconciles Incus.
+Semaphore stores two OpenBao AppRole SecretIDs, not the lab's application
+secrets. One role reads declared values; a separate create-only role can
+initialize missing generated groups under `incus-apps/apps/`. Apply All then
+renders the catalog and reconciles Incus. An hourly run retries reconciliation
+when a push webhook is missed.
 
 ## Assumptions
 
@@ -264,18 +265,20 @@ x-incus-apps:
           length: 64
 ```
 
-Prepare those values before the first push:
+Bootstrap prepares declared generated values if the app is already present.
+After bootstrap, push a new application directly:
 
 ```sh
-scripts/run-playbook playbooks/prepare_app.yml -e app=linkwarden
 git add apps/linkwarden.yaml
 git commit -m 'Add Linkwarden'
 scripts/push
 ```
 
-`prepare_app.yml` only creates absent generated values. If a required value has
-no generator, add it through OpenBao and rerun preparation. The push webhook
-then launches Semaphore's `Apply All` template. Application secrets never enter
+If a required value has no generator, add it through OpenBao before the push.
+The push webhook launches Semaphore's `Apply All` template; the hourly schedule
+runs the same template even if no further commit arrives. `prepare_app.yml`
+remains available for operator repair of existing secret groups. Application
+secrets never enter
 Git or the webhook payload. `scripts/push` retrieves the Gitea access token from
 OpenBao for that one command and refuses to send it anywhere except the expected
 private origin; it does not write the token to Git configuration or disk.
@@ -310,9 +313,15 @@ scripts/run-playbook playbooks/verify.yml
 ```
 
 Semaphore also exposes `Apply All` and `Update All` templates. `Apply All` is
-the Gitea webhook target. `Update All` deliberately excludes the platform
+the Gitea webhook target and has an hourly fallback. `Update All` deliberately excludes the platform
 applications so routine package updates cannot unexpectedly restart/seal
 OpenBao or interrupt the GitOps control plane.
+
+To update an existing lab after merging a public template release, run
+`scripts/run-playbook playbooks/reconcile_gitops_controller.yml` from the
+private checkout. It rotates the controller's OpenBao credentials and updates
+Semaphore without reseeding Gitea or reapplying platform resources. Then push
+the merged commit to private Gitea and inspect its Apply All task.
 
 ## Recovery and backups
 

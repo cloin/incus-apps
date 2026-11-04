@@ -35,6 +35,8 @@ openbao_kv_mount: kv
 openbao_operator_username: incus-apps-operator
 openbao_semaphore_role_name: incus-apps-semaphore
 openbao_semaphore_role_id: incus-apps-semaphore
+openbao_generator_role_name: incus-apps-generator
+openbao_generator_role_id: incus-apps-generator
 openbao_recovery_vault_path: >-
   {{ playbook_dir }}/../recovery/openbao.vault.yml
 

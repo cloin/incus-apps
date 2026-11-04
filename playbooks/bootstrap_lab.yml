@@ -8,6 +8,9 @@
 - name: Initialize OpenBao and generate platform credentials
   ansible.builtin.import_playbook: initialize_openbao.yml
 
+- name: Prepare declared generated application secrets
+  ansible.builtin.import_playbook: prepare_generated_secrets.yml
+
 - name: Deploy Gitea and Semaphore Incus primitives
   ansible.builtin.import_playbook: apply_platform.yml
 

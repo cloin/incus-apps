@@ -57,6 +57,37 @@
       delegate_to: openbao
       no_log: true
 
+    - name: List scoped generator SecretID accessors
+      ansible.builtin.uri:
+        url: >-
+          {{ _openbao_management_url }}/v1/auth/approle/role/{{ openbao_generator_role_name }}/secret-id
+        method: LIST
+        headers:
+          X-Vault-Token: "{{ _openbao_operator_login.json.auth.client_token }}"
+        status_code: 200
+      delegate_to: openbao
+      register: _openbao_generator_accessors
+      no_log: true
+
+    - name: Destroy superseded scoped generator SecretIDs
+      ansible.builtin.uri:
+        url: >-
+          {{ _openbao_management_url }}/v1/auth/approle/role/{{ openbao_generator_role_name }}/secret-id-accessor/destroy
+        method: POST
+        headers:
+          X-Vault-Token: "{{ _openbao_operator_login.json.auth.client_token }}"
+        body_format: json
+        body:
+          secret_id_accessor: "{{ item }}"
+        status_code: 204
+      loop: >-
+        {{ _openbao_generator_accessors.json.data['keys'] |
+           reject('equalto', openbao_generator_secret_id_accessor) | list }}
+      loop_control:
+        label: superseded-generator-accessor
+      delegate_to: openbao
+      no_log: true
+
     - name: Revoke the finalization token
       ansible.builtin.uri:
         url: "{{ _openbao_management_url }}/v1/auth/token/revoke-self"
