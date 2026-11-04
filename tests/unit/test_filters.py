@@ -71,3 +71,4 @@ def test_generated_secrets_are_scoped_to_the_declaring_application():
     assert not incus_app_generated_secret_path("incus-apps/apps/other", "example")
     assert not incus_app_generated_secret_path("incus-apps/apps/example-other", "example")
     assert not incus_app_generated_secret_path("incus-apps/semaphore", "example")
+    assert not incus_app_generated_secret_path("incus-apps/apps/example/../semaphore", "example")

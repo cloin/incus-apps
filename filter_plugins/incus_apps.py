@@ -144,7 +144,11 @@ def incus_app_secret_specs(definitions: list) -> list[dict]:
 def incus_app_generated_secret_path(path: str, application: str) -> bool:
     """Allow generated values only in the declaring application's KV subtree."""
     root = f"incus-apps/apps/{application}"
-    return path == root or path.startswith(root + "/")
+    if path == root:
+        return True
+    if not path.startswith(root + "/"):
+        return False
+    return all(re.fullmatch(r"[a-z0-9_-]+", part) for part in path[len(root) + 1 :].split("/"))
 
 
 class FilterModule:
