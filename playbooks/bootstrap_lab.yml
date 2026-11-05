@@ -20,6 +20,9 @@
 - name: Provision Semaphore and trust its Incus identity
   ansible.builtin.import_playbook: bootstrap_semaphore.yml
 
+- name: Hand off bootstrap ownership to Semaphore
+  ansible.builtin.import_playbook: handoff_ownership.yml
+
 - name: Deploy Caddy and generate the application routes
   ansible.builtin.import_playbook: reconcile_ingress.yml
 

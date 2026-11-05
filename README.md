@@ -175,8 +175,8 @@ The workflow then:
 1. validates Incus connectivity, storage, certificates, domains, and ports;
 2. deploys Caddy and OpenBao, initializes/unseals OpenBao, and generates
    platform credentials;
-3. deploys Gitea and Semaphore and gives Semaphore its own Incus client
-   certificate;
+3. deploys Gitea and Semaphore, gives Semaphore its own Incus client
+   certificate, and seeds its persistent ownership inventory from bootstrap;
 4. creates a private Gitea repository and pushes the personalized checkout;
 5. configures Semaphore's inventory, environment, templates, and Gitea webhook;
 6. launches a real AppRole-backed `Apply All` job;
@@ -338,6 +338,9 @@ Back up all of the following off the Incus host:
   `group_vars/all/lab.yml`;
 - the Ansible Vault password, stored separately;
 - Incus storage volumes/snapshots, especially OpenBao Raft and Gitea data;
+- Semaphore's `/home/semaphore/.local/state/cloin-incus-compose/ownership.json`
+  after the first Apply All, because it records the resources eligible for
+  catalog pruning;
 - the controller's trusted Incus identity or a documented way to issue another.
 
 The encrypted recovery file is not useful without its Vault password, and the

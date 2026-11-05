@@ -19,6 +19,9 @@ incus_compose_connection:
   server_cert_path: "{{ incus_server_cert_path }}"
   validate_certs: "{{ incus_validate_certs }}"
 incus_compose_default_storage_pool: "{{ incus_default_storage_pool }}"
+incus_compose_ownership_path: >-
+  {{ lookup('ansible.builtin.env', 'HOME') }}/.local/state/cloin-incus-compose/ownership.json
+incus_apps_semaphore_ownership_path: /home/semaphore/.local/state/cloin-incus-compose/ownership.json
 
 incus_lab_address: "{{ incus_host_address }}"
 gitea_hostname: "git.{{ lab_domain }}"
