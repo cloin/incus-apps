@@ -1,0 +1,64 @@
+---
+- name: Seed Semaphore with the bootstrap ownership inventory
+  hosts: semaphore
+  gather_facts: false
+
+  tasks:
+    - name: Read bootstrap ownership inventory on the execution host
+      ansible.builtin.slurp:
+        src: "{{ incus_compose_ownership_path }}"
+      delegate_to: localhost
+      register: _bootstrap_ownership
+
+    - name: Require completed bootstrap application records
+      ansible.builtin.assert:
+        that:
+          - >-
+            (_bootstrap_ownership.content | b64decode | from_json).records[
+              incus_remote ~ '/' ~ item].status == 'active'
+        fail_msg: >-
+          Bootstrap ownership for {{ item }} is missing or incomplete.
+          Finish its application reconciliation before handing off to Semaphore.
+      loop: "{{ incus_platform_applications }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Create Semaphore ownership inventory directory
+      ansible.builtin.file:
+        path: "{{ incus_apps_semaphore_ownership_path | dirname }}"
+        state: directory
+        owner: "{{ incus_apps_semaphore_owner | default('semaphore') }}"
+        group: "{{ incus_apps_semaphore_group | default('semaphore') }}"
+        mode: "0700"
+
+    - name: Seed Semaphore ownership inventory once
+      ansible.builtin.copy:
+        src: "{{ incus_compose_ownership_path }}"
+        dest: "{{ incus_apps_semaphore_ownership_path }}"
+        owner: "{{ incus_apps_semaphore_owner | default('semaphore') }}"
+        group: "{{ incus_apps_semaphore_group | default('semaphore') }}"
+        mode: "0600"
+        force: false
+
+    - name: Read Semaphore ownership inventory
+      ansible.builtin.slurp:
+        src: "{{ incus_apps_semaphore_ownership_path }}"
+      register: _semaphore_ownership
+
+    - name: Verify Semaphore received the bootstrap ownership tokens
+      ansible.builtin.assert:
+        that:
+          - >-
+            (_semaphore_ownership.content | b64decode | from_json).records[
+              incus_remote ~ '/' ~ item].token ==
+            (_bootstrap_ownership.content | b64decode | from_json).records[
+              incus_remote ~ '/' ~ item].token
+          - >-
+            (_semaphore_ownership.content | b64decode | from_json).records[
+              incus_remote ~ '/' ~ item].status == 'active'
+        fail_msg: >-
+          Semaphore's inventory disagrees with bootstrap for {{ item }}.
+          Restore or reconcile the inventories before launching Apply All.
+      loop: "{{ incus_platform_applications }}"
+      loop_control:
+        label: "{{ item }}"
